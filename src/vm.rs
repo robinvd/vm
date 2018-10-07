@@ -17,6 +17,7 @@ pub enum Opcode {
     Print,
     Add,
     Mul,
+    Div,
     Neg,
     LEQ,
     If,
@@ -57,7 +58,7 @@ pub enum VMError {
     CombineErr(String),
 }
 
-pub struct VM {
+pub struct VM<'a> {
     code: Vec<u8>,
     code_ptr: usize,
     stack: Vec<isize>,
@@ -65,18 +66,18 @@ pub struct VM {
     labels: HashMap<String, usize>,
     label_index: Vec<String>,
 
-    output: Box<dyn io::Write>,
+    output: Box<io::Write + 'a>,
 
     pub debug: bool,
 }
 
-impl Default for VM {
+impl<'a> Default for VM<'a> {
     fn default() -> Self {
         Self::new(Box::new(io::stdout()))
     }
 }
 
-impl fmt::Debug for VM {
+impl<'a> fmt::Debug for VM<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "code:");
         let mut i = 0;
@@ -109,8 +110,8 @@ impl fmt::Debug for VM {
     }
 }
 
-impl VM {
-    pub fn new(output: Box<dyn io::Write>) -> Self {
+impl<'a> VM<'a> {
+    pub fn new(output: Box<io::Write + 'a>) -> Self {
         Self {
             code: Default::default(),
             code_ptr: Default::default(),
@@ -125,6 +126,10 @@ impl VM {
         }
     }
 
+    // pub fn output(&self) -> &Box<dyn io::Write> {
+    //     &self.output
+    // }
+
     pub fn parse_instr(&mut self, instr: &Instr) -> Result<(), VMError> {
         let opcode = match instr.instr {
             "push" => Opcode::Push,
@@ -136,6 +141,7 @@ impl VM {
             "print" => Opcode::Print,
             "add" => Opcode::Add,
             "mul" => Opcode::Mul,
+            "div" => Opcode::Div,
             "neg" => Opcode::Neg,
             "leq" => Opcode::LEQ,
             "if" => Opcode::If,
@@ -326,7 +332,8 @@ impl VM {
                 self.pop()?;
             }
             Opcode::Print => {
-                writeln!(self.output, "{}", self.peek());
+                let val = self.pop()?;
+                writeln!(self.output, "{}", val);
             }
             Opcode::Add => {
                 let a = self.pop()?;
@@ -337,6 +344,11 @@ impl VM {
                 let a = self.pop()?;
                 let b = self.pop()?;
                 self.push(a * b);
+            }
+            Opcode::Div => {
+                let a = self.pop()?;
+                let b = self.pop()?;
+                self.push(b/a);
             }
             Opcode::Neg => {
                 let a = self.pop()?;
@@ -361,7 +373,7 @@ impl VM {
                 let label_index = self.advance_lit();
                 let cond = self.pop()?;
                 if !(cond > 0) {
-                    self.jump_to_label_index(label_index as usize);
+                    self.jump_to_label_index(label_index as usize)?;
                 }
             }
             Opcode::Nop => {}
@@ -372,7 +384,7 @@ impl VM {
     pub fn run(&mut self) -> Result<isize, VMError> {
         loop {
             if self.debug {
-                if Opcode::from_u8(self.code[self.code_ptr]) != Some(Opcode::Nop) {
+                if self.code.get(self.code_ptr).and_then(|x| Opcode::from_u8(x.clone())) != Some(Opcode::Nop) {
                     println!("{:?}", self);
                     let mut input = String::new();
                     io::stdin().read_line(&mut input);
@@ -391,6 +403,82 @@ impl VM {
 mod tests {
     use super::*;
 
+    fn test_file(vm: &mut VM, file: impl AsRef<std::path::Path>) -> Result<isize, VMError> {
+        use std::io::Read;
+
+        let mut input = String::new();
+
+        std::fs::File::open(file)
+            .unwrap()
+            .read_to_string(&mut input)
+            .unwrap();
+        vm.parse_ir(&input).unwrap();
+        vm.run()
+    }
+
+    fn test_instr(instr: &str, vals: &[isize], result: isize) {
+        let mut vm = VM::default();
+        let start = vals.iter().map(|x| format!("push {}\n", x)).collect::<String>();
+        let p_res = vm.parse_ir(&format!("{}\n{}\nhalt", start, instr));
+        assert_eq!(p_res, Ok(()));
+        let vm_result = vm.run();
+        assert_eq!(vm_result, Ok(result));
+    }
+
+    #[test]
+    fn test_push() {
+        let mut vm = VM::default();
+        vm.parse_ir(
+            r#".code
+            push 1
+            halt"#,
+        ).unwrap();
+        assert_eq!(vm.run(), Ok(1));
+    }
+
+    #[test]
+    fn test_copy() {
+       test_instr("copy 1", &[10, 15], 10);
+    }
+
+   #[test]
+   fn test_add() {
+       test_instr("add", &[10, 15], 25);
+   }
+   #[test]
+   fn test_mul() {
+       test_instr("mul", &[10, 15], 150);
+   }
+   #[test]
+   fn test_div() {
+       test_instr("div", &[10, 2], 5);
+   }
+   #[test]
+   fn test_neg() {
+       test_instr("neg", &[10], -10);
+   }
+   #[test]
+   fn test_leq() {
+       test_instr("leq", &[10,10], 1);
+       test_instr("leq", &[9,10], 1);
+       test_instr("leq", &[10,9], 0);
+   }
+   #[test]
+   fn test_pop() {
+       test_instr("pop", &[10, 15], 10);
+   }
+
+   #[test]
+    fn test_math() {
+        let mut buffer = Vec::new();
+        {
+            let mut vm = VM::new(Box::new(&mut buffer));
+            let result = test_file(&mut vm, "tests/math.vmb");
+            assert_eq!(result, Ok(0));
+        };
+        assert_eq!(buffer.as_slice(), &b"7\n10\n-10\n5\n"[..]);
+    }
+
     #[test]
     fn vm_test() {
         let mut vm = VM::default();
@@ -408,48 +496,12 @@ mod tests {
 
     #[test]
     fn label_if_test() {
-        let mut vm = VM::default();
-        vm.parse_ir(
-            r#".code
-            start: push 1
-            if true
-            jmp false
-
-            true: push 1
-            halt
-            false: push 2
-            halt"#,
-        ).unwrap();
-        let result = vm.run();
-        println!("{:?}", vm);
-        assert_eq!(result, Ok(2));
+        assert_eq!(test_file(&mut VM::default(), "tests/label.vmb"), Ok(2));
     }
 
     #[test]
     fn sqrt_test() {
-        let mut vm = VM::default();
-        vm.parse_ir(
-            r#"
-            .code
-            push 1048576
-            copy 0
-            push 1
-            copy 0
-            loop: nop
-                copy 0
-                mul
-                copy 2
-                leq
-                if done
-                push 1
-                add
-                copy 0
-                jmp loop
-            
-            done: halt
-            "#,
-        ).unwrap();
-        assert_eq!(vm.run(), Ok(1024));
+        assert_eq!(test_file(&mut VM::default(), "tests/sqrt.vmb"), Ok(1024));
     }
 
 }

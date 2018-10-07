@@ -57,7 +57,7 @@ fn main() {
 
     let result = vm.run();
 
-    // if matches.is_present("verbose") {
-    println!("result: {:?}", result);
-    // }
+    if matches.is_present("verbose") {
+        println!("result: {:?}", result);
+    }
 }
