@@ -1,12 +1,14 @@
 [package]
-name = "vm"
+name = "sabi"
 version = "0.1.0"
 authors = ["robin <beemo@openmailbox.org>"]
+license = "GPL-3.0-only"
+description = "A rust like language with a stack based vm"
 edition = "2018"
 
 [dependencies]
 regex = "1.0.5"
 lazy_static = "1.1.0"
 byteorder = "1"
-combine = {path = "../combine"}
-clap = "*"
+combine = "3.6"
+clap = "2.32"

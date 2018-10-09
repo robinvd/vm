@@ -11,7 +11,7 @@ loop: nop
     mul
     copy 2
     leq
-    if end
+    jmpz end
     push 1
     add
     copy 0

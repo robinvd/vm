@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::{fmt, io, mem};
 
-use crate::bc_parser::{self, Arg, Instr};
+use crate::parser::bytecode::{self, Arg, Instr};
 
 use combine::Parser;
 
@@ -20,7 +20,7 @@ pub enum Opcode {
     Div,
     Neg,
     LEQ,
-    If,
+    JmpZ,
     Jmp,
     JmpR,
     Nop,
@@ -40,7 +40,7 @@ impl Opcode {
             Opcode::Push
             | Opcode::JmpR
             | Opcode::Jmp
-            | Opcode::If
+            | Opcode::JmpZ
             | Opcode::Load
             | Opcode::Store
             | Opcode::Copy => true,
@@ -126,10 +126,6 @@ impl<'a> VM<'a> {
         }
     }
 
-    // pub fn output(&self) -> &Box<dyn io::Write> {
-    //     &self.output
-    // }
-
     pub fn parse_instr(&mut self, instr: &Instr) -> Result<(), VMError> {
         let opcode = match instr.instr {
             "push" => Opcode::Push,
@@ -144,7 +140,7 @@ impl<'a> VM<'a> {
             "div" => Opcode::Div,
             "neg" => Opcode::Neg,
             "leq" => Opcode::LEQ,
-            "if" => Opcode::If,
+            "jmpz" => Opcode::JmpZ,
             "jmp" => Opcode::Jmp,
             "jmpr" => Opcode::JmpR,
             "nop" => Opcode::Nop,
@@ -190,41 +186,6 @@ impl<'a> VM<'a> {
         }
 
         Ok(())
-
-        // match data.parse::<i64>() {
-        //     Ok(num) => {
-        //         let raw_bytes: [u8; 8] = unsafe { mem::transmute(num) };
-        //         self.code.extend_from_slice(&raw_bytes);
-        //         Ok(())
-        //     },
-        //     Err(e) => {
-        //         let opcode = match data {
-        //             "push" => Opcode::Push,
-        //             "copy" => Opcode::Copy,
-        //             "load" => Opcode::Load,
-        //             "store" => Opcode::Store,
-        //             "pop" => Opcode::Pop,
-        //             "halt" => Opcode::Halt,
-        //             "print" => Opcode::Print,
-        //             "add" => Opcode::Add,
-        //             "mul" => Opcode::Mul,
-        //             "neg" => Opcode::Neg,
-        //             "leq" => Opcode::LEQ,
-        //             "if" => Opcode::If,
-        //             "jmp" => Opcode::Jmp,
-        //             "jmpr" => Opcode::JmpR,
-        //             x => return Err(VMError::ParseErr(format!("{}: {}", x, e)))
-        //         };
-        //         if opcode.has_arg() {
-        //             while self.code.len() % 4 != 3 {
-        //                 self.code.push(Opcode::Nop as u8)
-        //             }
-        //         }
-        //         self.code.push(opcode as u8);
-        //         Ok(())
-
-        //     }
-        // }
     }
 
     pub fn parse_opcode_data(&mut self, _data: &str) -> Result<(), VMError> {
@@ -232,11 +193,6 @@ impl<'a> VM<'a> {
     }
 
     pub fn parse_ir(&mut self, input: &str) -> Result<(), VMError> {
-        // lazy_static! {
-        //     static ref split_regex: regex::Regex = regex::Regex::new(r"\s+").expect("invalid regex");
-        //     static ref line_regex: regex::Regex = regex::Regex::new(r"\s+\n\s+").expect("invalid regex");
-        // }
-
         #[derive(Debug)]
         enum Mode {
             Code,
@@ -254,7 +210,7 @@ impl<'a> VM<'a> {
                         if x.is_empty() {
                             continue;
                         }
-                        let (res, extra) = bc_parser::parse_instr()
+                        let (res, extra) = bytecode::parse_instr()
                             .easy_parse(x)
                             .map_err(|e| VMError::CombineErr(format!("{:?}", e)))?;
 
@@ -352,12 +308,13 @@ impl<'a> VM<'a> {
             }
             Opcode::Neg => {
                 let a = self.pop()?;
-                self.push(-a);
+                self.push(-(a - 1));
             }
             Opcode::LEQ => {
+                // push a, push b, leq == a <= b
                 let a = self.pop()?;
                 let b = self.pop()?;
-                let val = if b < a { 1 } else { -1 };
+                let val = if a <= b { 0 } else { 1 };
                 self.push(val);
             }
             Opcode::Jmp => {
@@ -369,10 +326,10 @@ impl<'a> VM<'a> {
                 let x = self.advance_lit();
                 self.code_ptr = (x as isize + self.code_ptr as isize) as usize;
             }
-            Opcode::If => {
+            Opcode::JmpZ => {
                 let label_index = self.advance_lit();
                 let cond = self.pop()?;
-                if !(cond > 0) {
+                if cond == 0 {
                     self.jump_to_label_index(label_index as usize)?;
                 }
             }
@@ -455,11 +412,11 @@ mod tests {
    }
    #[test]
    fn test_neg() {
-       test_instr("neg", &[10], -10);
+       test_instr("neg", &[1], 0);
    }
    #[test]
    fn test_leq() {
-       test_instr("leq", &[10,10], 1);
+       test_instr("leq", &[10,10], 0);
        test_instr("leq", &[9,10], 1);
        test_instr("leq", &[10,9], 0);
    }
@@ -467,32 +424,6 @@ mod tests {
    fn test_pop() {
        test_instr("pop", &[10, 15], 10);
    }
-
-   #[test]
-    fn test_math() {
-        let mut buffer = Vec::new();
-        {
-            let mut vm = VM::new(Box::new(&mut buffer));
-            let result = test_file(&mut vm, "tests/math.vmb");
-            assert_eq!(result, Ok(0));
-        };
-        assert_eq!(buffer.as_slice(), &b"7\n10\n-10\n5\n"[..]);
-    }
-
-    #[test]
-    fn vm_test() {
-        let mut vm = VM::default();
-        vm.parse_ir(
-            r#".code
-            start: push 1
-            copy 0
-            add
-            push 2
-            mul
-            halt"#,
-        ).unwrap();
-        assert_eq!(vm.run(), Ok(4));
-    }
 
     #[test]
     fn label_if_test() {

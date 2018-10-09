@@ -1,6 +1,6 @@
 .code
     start: push 1
-    if true
+    jmpz true
     jmp false
 
     true: push 1

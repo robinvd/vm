@@ -2,7 +2,7 @@ extern crate regex;
 #[macro_use]
 extern crate combine;
 
-mod bc_parser;
+mod parser;
 mod vm;
 
 use std::fs;
