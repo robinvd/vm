@@ -3,7 +3,7 @@ name = "sabi"
 version = "0.1.0"
 authors = ["robin <beemo@openmailbox.org>"]
 license = "GPL-3.0-only"
-description = "A rust like language with a stack based vm"
+description = "A rust like language with a stack based vm, alternative name: sabimatai"
 edition = "2018"
 
 [dependencies]

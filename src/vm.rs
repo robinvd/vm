@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::{fmt, io, mem};
+use std::sync::{Arc, Mutex};
 
 use crate::parser::bytecode::{self, Arg, Instr};
 
@@ -8,6 +9,7 @@ use combine::Parser;
 #[derive(Clone, Debug, PartialEq)]
 #[repr(u8)]
 pub enum Opcode {
+    // general
     Halt,
     Push,
     Pop,
@@ -15,14 +17,30 @@ pub enum Opcode {
     Load,
     Store,
     Print,
+
+    // fn
+    Call,
+    Ret,
+
+    // math
     Add,
     Mul,
     Div,
     Neg,
+
+    // bool
+    Not,
     LEQ,
+
+    // jmp
     JmpZ,
     Jmp,
     JmpR,
+
+    // async:
+    // asyncjmp
+    // await
+
     Nop,
 }
 
@@ -43,6 +61,7 @@ impl Opcode {
             | Opcode::JmpZ
             | Opcode::Load
             | Opcode::Store
+            | Opcode::Call
             | Opcode::Copy => true,
             _ => false,
         }
@@ -56,34 +75,56 @@ pub enum VMError {
     WrongOpCode,
     EmptyPop,
     CombineErr(String),
+    Msg(String),
 }
 
-pub struct VM<'a> {
-    code: Vec<u8>,
+// static (read only) and state part
+
+// state:
+
+/// a single thread
+/// 
+/// a fiber has its own stack
+pub struct Fiber<'a, 'write> {
+    base: &'a VM<'write>,
+    f: Vec<FState<'a>>,
+    value_stack: Vec<isize>,
+}
+
+/// a single function
+/// it has its own labels
+/// it shares a stack
+pub struct FState<'a> {
+    current_block: &'a Block,
     code_ptr: usize,
-    stack: Vec<isize>,
+}
 
-    labels: HashMap<String, usize>,
-    label_index: Vec<String>,
+// static
+pub struct VM<'write> {
+    blocks: Vec<Block>,
+    fn_labels: HashMap<String, usize>,
+    fn_label_index: Vec<String>,
 
-    output: Box<io::Write + 'a>,
+    data: Vec<&'static str>,
+
+    output: Arc<Mutex<Box<io::Write + 'write>>>,
 
     pub debug: bool,
 }
 
-impl<'a> Default for VM<'a> {
-    fn default() -> Self {
-        Self::new(Box::new(io::stdout()))
-    }
+pub struct Block {
+    pub name: String,
+    pub code: Vec<u8>,
+
+    pub labels: HashMap<String, usize>,
+    pub label_index: Vec<String>,
 }
 
-impl<'a> fmt::Debug for VM<'a> {
+impl fmt::Debug for Block {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "code:");
+        writeln!(f, "{}:", self.name);
         let mut i = 0;
         while i < self.code.len() {
-            let current = i == self.code_ptr;
-
             let op = Opcode::from_u8(self.code[i]).unwrap();
             if op == Opcode::Nop {
                 i += 1;
@@ -95,38 +136,258 @@ impl<'a> fmt::Debug for VM<'a> {
                 let slice = &self.code.as_slice()[i + 1..i + 1 + 8].as_ptr();
                 let num: i64 = unsafe { *(*slice as *const i64) };
                 i += 8;
-                write!(f, " {:?}", num);
+
+                if let Some(s) = self.label_index.get(num as usize) {
+                    write!(f, " {}/{}", num,s);
+                } else {
+                    write!(f, " {}", num);
+                }
             }
 
-            if current {
-                write!(f, " <");
-            }
             writeln!(f, "");
             i += 1;
         }
-        writeln!(f, "code_ptr: {:04x}", self.code_ptr);
-        self.stack.fmt(f)?;
+        writeln!(f, "{:?}", self.labels);
+        writeln!(f, "{:?}", self.label_index);
+
+        Ok(())       
+    }
+}
+
+impl<'a> FState<'a> {
+    pub fn new(current_block: &'a Block) -> Self {
+        Self {
+            current_block,
+            code_ptr: 0,
+        }
+    }
+
+    pub fn advance_opcode(&mut self) -> Opcode {
+        let op = self.current_block.code[self.code_ptr].clone();
+        self.code_ptr += 1;
+
+        // internal opcodes should always be valid
+        Opcode::from_u8(op).expect(&format!("{} not a valid opcode", op))
+    }
+
+    pub fn advance_lit(&mut self) -> i64 {
+        let slice = &self.current_block.code.as_slice()[self.code_ptr..self.code_ptr + 8].as_ptr();
+        let num: i64 = unsafe { *(*slice as *const i64) };
+        self.code_ptr += 8;
+
+        num
+    }
+
+    pub fn jump_to_label_index(&mut self, index: usize) -> Result<(), VMError> {
+        let label = &self.current_block.label_index[index];
+        let new_code_ptr = self.current_block.labels[label];
+        self.code_ptr = new_code_ptr;
+
         Ok(())
     }
 }
 
-impl<'a> VM<'a> {
-    pub fn new(output: Box<io::Write + 'a>) -> Self {
+impl<'a, 'write> Fiber<'a, 'write> {
+    pub fn new(base: &'a VM<'write>, f: FState<'a>) -> Self {
         Self {
-            code: Default::default(),
-            code_ptr: Default::default(),
-            stack: Default::default(),
-
-            labels: Default::default(),
-            label_index: Default::default(),
-
-            output: output,
-
-            debug: false,
+            base,
+            f: vec![f],
+            value_stack: Vec::default(),
         }
     }
 
-    pub fn parse_instr(&mut self, instr: &Instr) -> Result<(), VMError> {
+    pub fn push(&mut self, x: isize) {
+        self.value_stack.push(x)
+    }
+
+    pub fn pop(&mut self) -> Result<isize, VMError> {
+        self.value_stack.pop().ok_or(VMError::EmptyPop)
+    }
+
+    pub fn current_f(&mut self) -> &mut FState<'a> {
+        self.f.last_mut().expect("empty fiber")
+    }
+
+    pub fn push_frame(&mut self, f_index: usize) {
+        let block_index = self.base.fn_labels[&self.base.fn_label_index[f_index]];
+        let new_block = &self.base.blocks[block_index];
+        let f = FState::new(new_block);
+
+        self.f.push(f);
+    }
+
+    pub fn pop_frame(&mut self) {
+        self.f.pop();
+    }
+
+    pub fn step(&mut self) -> Result<(), VMError> {
+        match self.current_f().advance_opcode() {
+            Opcode::Halt => return Err(VMError::Halt),
+            Opcode::Push => {
+                let x = self.current_f().advance_lit() as isize;
+                self.push(x);
+            }
+            Opcode::Copy => {
+                let x = self.current_f().advance_lit() as usize;
+                self.push(self.value_stack[self.value_stack.len() - 1 - x]);
+            }
+            Opcode::Load => {
+                // let x = self.advance_lit() as usize;
+                // self.push(self.stack[x]);
+            }
+            Opcode::Store => {
+                // let x = self.advance_lit() as usize;
+                // self.stack[x] = self.pop()?;
+            }
+            Opcode::Call => {
+                let x = self.current_f().advance_lit();
+                self.push_frame(x as usize)
+            }
+            Opcode::Ret => {
+                self.pop_frame()
+            }
+            Opcode::Pop => {
+                self.pop()?;
+            }
+            Opcode::Print => {
+                let val = self.pop()?;
+                let mut data = self.base.output.lock().unwrap();
+                writeln!(data, "{}", val);
+            }
+            Opcode::Add => {
+                let a = self.pop()?;
+                let b = self.pop()?;
+                self.push(a + b);
+            }
+            Opcode::Mul => {
+                let a = self.pop()?;
+                let b = self.pop()?;
+                self.push(a * b);
+            }
+            Opcode::Div => {
+                let a = self.pop()?;
+                let b = self.pop()?;
+                self.push(b/a);
+            }
+            Opcode::Neg => {
+                let a = self.pop()?;
+                self.push(-a);
+            }
+            Opcode::Not => {
+                let a = self.pop()?;
+                self.push(-(a - 1));
+            }
+            Opcode::LEQ => {
+                // push a, push b, leq == a <= b
+                let a = self.pop()?;
+                let b = self.pop()?;
+                let val = if a <= b { 0 } else { 1 };
+                self.push(val);
+            }
+            Opcode::Jmp => {
+                // let x = self.pop()?;
+                let x = self.current_f().advance_lit();
+                self.current_f().jump_to_label_index(x as usize)?;
+            }
+            Opcode::JmpR => {
+                // let x = self.advance_lit();
+                // self.code_ptr = (x as isize + self.code_ptr as isize) as usize;
+            }
+            Opcode::JmpZ => {
+                let label_index = self.current_f().advance_lit();
+                let cond = self.pop()?;
+                if cond == 0 {
+                    self.current_f().jump_to_label_index(label_index as usize)?;
+                }
+            }
+            Opcode::Nop => {}
+        };
+        Ok(())
+    }
+
+    pub fn run(&mut self) -> Result<isize, VMError> {
+        loop {
+            // if self.base.debug {
+            //     if self.code.get(self.code_ptr).and_then(|x| Opcode::from_u8(x.clone())) != Some(Opcode::Nop) {
+            //         println!("{:?}", self);
+            //         let mut input = String::new();
+            //         io::stdin().read_line(&mut input);
+            //     }
+            // }
+            match self.step() {
+                Ok(_) => continue,
+                Err(VMError::Halt) => return Ok(self.pop()?),
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+}
+
+impl Block {
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            code: Vec::default(),
+            labels: Default::default(),
+            label_index: Default::default(),
+        }
+    }
+
+    pub fn add_opcode(&mut self, vm: &mut VM, opcode: Opcode, arg: Option<&Arg>) -> Result<(), VMError> {
+        if opcode.has_arg() && !arg.is_some() {
+            return Err(VMError::Msg("opcode has no arg".to_owned()))
+        }
+        if !opcode.has_arg() && arg.is_some() {
+            return Err(VMError::Msg("opcode has an arg".to_owned()))
+        }
+
+        if opcode.has_arg() {
+            while self.code.len() % 4 != 3 {
+                self.code.push(Opcode::Nop as u8)
+            }
+        }
+
+        self.code.push(opcode.clone() as u8);
+
+        if let Some(ref a) = arg {
+            let num = match a {
+                Arg::Text(t) => {
+                    if opcode == Opcode::Call {
+                        let i = vm.fn_label_index.len();
+                        vm.fn_label_index.push((*t).to_owned());
+                        i
+                    } else {
+                        let i = self.label_index.len();
+                        self.label_index.push((*t).to_owned());
+                        i
+                    }
+                }
+                Arg::Int(i) => *i as usize,
+            };
+            let raw_bytes: [u8; 8] = unsafe { mem::transmute(num) };
+
+            // if self.debug {
+            //     println!("conversion {} -> {:?}", num, raw_bytes);
+            // }
+            self.code.extend_from_slice(&raw_bytes);
+        };
+
+
+        Ok(())
+    }
+
+    /// Add a label to the current location
+    /// a jump to this label jumps to the instruction
+    /// after the label
+    pub fn add_label(&mut self, label: &str) -> Result<(), VMError> {
+        let opcode_index = self.code.len();
+        self.labels.insert(label.to_owned(), opcode_index);
+
+        Ok(())
+    }
+
+    pub fn parse_instr(&mut self, vm: &mut VM, instr: &Instr) -> Result<(), VMError> {
         let opcode = match instr.instr {
             "push" => Opcode::Push,
             "copy" => Opcode::Copy,
@@ -135,10 +396,13 @@ impl<'a> VM<'a> {
             "pop" => Opcode::Pop,
             "halt" => Opcode::Halt,
             "print" => Opcode::Print,
+            "call" => Opcode::Call,
+            "ret" => Opcode::Ret,
             "add" => Opcode::Add,
             "mul" => Opcode::Mul,
             "div" => Opcode::Div,
             "neg" => Opcode::Neg,
+            "not" => Opcode::Not,
             "leq" => Opcode::LEQ,
             "jmpz" => Opcode::JmpZ,
             "jmp" => Opcode::Jmp,
@@ -147,43 +411,10 @@ impl<'a> VM<'a> {
             x => return Err(VMError::ParseErr(format!("err invalid instr: {:?}", x))),
         };
 
-        if instr.arg.is_some() && !opcode.has_arg() {
-            return Err(VMError::WrongOpCode);
+        if let Some(ref x) = instr.label {
+            self.add_label(x)?;
         }
-
-        if let Some(ref _a) = &instr.arg {
-            if opcode.has_arg() {
-                while self.code.len() % 4 != 3 {
-                    self.code.push(Opcode::Nop as u8)
-                }
-            } else {
-                return Err(VMError::WrongOpCode);
-            }
-        }
-
-        let opcode_index = self.code.len();
-        self.code.push(opcode as u8);
-
-        if let Some(ref a) = &instr.arg {
-            let num = match a {
-                Arg::Text(t) => {
-                    let i = self.label_index.len();
-                    self.label_index.push((*t).to_owned());
-                    i
-                }
-                Arg::Int(i) => *i as usize,
-            };
-            let raw_bytes: [u8; 8] = unsafe { mem::transmute(num) };
-
-            if self.debug {
-                println!("conversion {} -> {:?}", num, raw_bytes);
-            }
-            self.code.extend_from_slice(&raw_bytes);
-        };
-
-        if let Some(label) = instr.label {
-            self.labels.insert(label.to_owned(), opcode_index);
-        }
+        self.add_opcode(vm, opcode.clone(), instr.arg.as_ref())?;
 
         Ok(())
     }
@@ -192,7 +423,7 @@ impl<'a> VM<'a> {
         Ok(())
     }
 
-    pub fn parse_ir(&mut self, input: &str) -> Result<(), VMError> {
+    pub fn parse_ir(&mut self, vm: &mut VM, input: &str) -> Result<(), VMError> {
         #[derive(Debug)]
         enum Mode {
             Code,
@@ -218,7 +449,7 @@ impl<'a> VM<'a> {
                             return Err(VMError::ParseErr("trailing char".to_owned()));
                         }
 
-                        self.parse_instr(&res)?
+                        self.parse_instr(vm, &res)?
                     }
                     Mode::Data => self.parse_opcode_data(x)?,
                     Mode::Comment => {}
@@ -229,131 +460,80 @@ impl<'a> VM<'a> {
         Ok(())
     }
 
-    fn advance_opcode(&mut self) -> Opcode {
-        let op = self.code[self.code_ptr].clone();
-        self.code_ptr += 1;
+}
 
-        // internal opcodes should always be valid
-        Opcode::from_u8(op).unwrap()
+// pub struct VM<'a> {
+//     code: Vec<u8>,
+//     code_ptr: usize,
+//     stack: Vec<isize>,
+
+//     labels: HashMap<String, usize>,
+//     label_index: Vec<String>,
+
+//     output: Box<io::Write + 'a>,
+
+//     pub debug: bool,
+// }
+
+impl<'a> Default for VM<'a> {
+    fn default() -> Self {
+        Self::new(Box::new(io::stdout()))
     }
+}
 
-    fn advance_lit(&mut self) -> i64 {
-        let slice = &self.code.as_slice()[self.code_ptr..self.code_ptr + 8].as_ptr();
-        let num: i64 = unsafe { *(*slice as *const i64) };
-        self.code_ptr += 8;
+impl<'a> fmt::Debug for VM<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // writeln!(f, "code:");
+       writeln!(f, "{:?}", self.fn_labels)?;
+       writeln!(f, "{:?}", self.fn_label_index)?;
 
-        num
-    }
-
-    pub fn peek(&self) -> isize {
-        self.stack[self.stack.len() - 1]
-    }
-
-    pub fn push(&mut self, x: isize) {
-        self.stack.push(x)
-    }
-
-    pub fn pop(&mut self) -> Result<isize, VMError> {
-        self.stack.pop().ok_or(VMError::EmptyPop)
-    }
-
-    pub fn jump_to_label_index(&mut self, index: usize) -> Result<(), VMError> {
-        let label = &self.label_index[index];
-        let new_code_ptr = self.labels[label];
-        self.code_ptr = new_code_ptr;
+        for b in self.blocks.iter() {
+            writeln!(f, "{:?}", b)?;
+        }
 
         Ok(())
     }
+}
 
-    pub fn step(&mut self) -> Result<(), VMError> {
-        match self.advance_opcode() {
-            Opcode::Halt => return Err(VMError::Halt),
-            Opcode::Push => {
-                let x = self.advance_lit() as isize;
-                self.push(x);
-            }
-            Opcode::Copy => {
-                let x = self.advance_lit() as usize;
-                self.push(self.stack[self.stack.len() - 1 - x]);
-            }
-            Opcode::Load => {
-                let x = self.advance_lit() as usize;
-                self.push(self.stack[x]);
-            }
-            Opcode::Store => {
-                let x = self.advance_lit() as usize;
-                self.stack[x] = self.pop()?;
-            }
-            Opcode::Pop => {
-                self.pop()?;
-            }
-            Opcode::Print => {
-                let val = self.pop()?;
-                writeln!(self.output, "{}", val);
-            }
-            Opcode::Add => {
-                let a = self.pop()?;
-                let b = self.pop()?;
-                self.push(a + b);
-            }
-            Opcode::Mul => {
-                let a = self.pop()?;
-                let b = self.pop()?;
-                self.push(a * b);
-            }
-            Opcode::Div => {
-                let a = self.pop()?;
-                let b = self.pop()?;
-                self.push(b/a);
-            }
-            Opcode::Neg => {
-                let a = self.pop()?;
-                self.push(-(a - 1));
-            }
-            Opcode::LEQ => {
-                // push a, push b, leq == a <= b
-                let a = self.pop()?;
-                let b = self.pop()?;
-                let val = if a <= b { 0 } else { 1 };
-                self.push(val);
-            }
-            Opcode::Jmp => {
-                // let x = self.pop()?;
-                let x = self.advance_lit();
-                self.jump_to_label_index(x as usize)?;
-            }
-            Opcode::JmpR => {
-                let x = self.advance_lit();
-                self.code_ptr = (x as isize + self.code_ptr as isize) as usize;
-            }
-            Opcode::JmpZ => {
-                let label_index = self.advance_lit();
-                let cond = self.pop()?;
-                if cond == 0 {
-                    self.jump_to_label_index(label_index as usize)?;
-                }
-            }
-            Opcode::Nop => {}
-        };
-        Ok(())
-    }
+impl<'a> VM<'a> {
+    pub fn new(output: Box<io::Write + 'a + Sync>) -> Self {
+        Self {
+            blocks: Default::default(),
 
-    pub fn run(&mut self) -> Result<isize, VMError> {
-        loop {
-            if self.debug {
-                if self.code.get(self.code_ptr).and_then(|x| Opcode::from_u8(x.clone())) != Some(Opcode::Nop) {
-                    println!("{:?}", self);
-                    let mut input = String::new();
-                    io::stdin().read_line(&mut input);
-                }
-            }
-            match self.step() {
-                Ok(_) => continue,
-                Err(VMError::Halt) => return Ok(self.pop()?),
-                Err(e) => return Err(e),
-            }
+            fn_labels: Default::default(),
+            fn_label_index: Default::default(),
+
+            data: Default::default(),
+
+            output: Arc::new(Mutex::new(output)),
+
+            debug: false,
         }
     }
+
+    pub fn new_fiber<'b>(&'b self, label: &str) -> Result<Fiber<'b, 'a>, VMError> {
+        let fs = FState::new(&self.blocks[self.fn_labels[label]]);
+        let fiber = Fiber::new(self, fs);
+
+        Ok(fiber)
+    }
+
+    pub fn add_block(&mut self, block: Block) {
+        let pos = self.blocks.len();
+        let name = block.name.clone();
+        self.blocks.push(block);
+        self.fn_labels.insert(name, pos);
+    }
+
+    pub fn parse_ir_block(&mut self, name: impl Into<String>, input: &str) -> Result<(), VMError> {
+        let mut bl = Block::new(name.into());
+
+        bl.parse_ir(self, input)?;
+        self.add_block(bl);
+
+        Ok(())
+    }
+
 }
 
 #[cfg(test)]
@@ -369,29 +549,32 @@ mod tests {
             .unwrap()
             .read_to_string(&mut input)
             .unwrap();
-        vm.parse_ir(&input).unwrap();
-        vm.run()
+        vm.parse_ir_block("test", &input)?;
+        let mut f = vm.new_fiber("test")?;
+        f.run()
     }
 
     fn test_instr(instr: &str, vals: &[isize], result: isize) {
         let mut vm = VM::default();
         let start = vals.iter().map(|x| format!("push {}\n", x)).collect::<String>();
-        let p_res = vm.parse_ir(&format!("{}\n{}\nhalt", start, instr));
+        let p_res = vm.parse_ir_block("test", &format!("{}\n{}\nhalt", start, instr));
         assert_eq!(p_res, Ok(()));
-        let vm_result = vm.run();
+        println!("{:?}", vm);
+        let mut f = vm.new_fiber("test").unwrap();
+        let vm_result = f.run();
         assert_eq!(vm_result, Ok(result));
     }
 
-    #[test]
-    fn test_push() {
-        let mut vm = VM::default();
-        vm.parse_ir(
-            r#".code
-            push 1
-            halt"#,
-        ).unwrap();
-        assert_eq!(vm.run(), Ok(1));
-    }
+    // #[test]
+    // fn test_push() {
+    //     let mut vm = VM::default();
+    //     vm.parse_ir(
+    //         r#".code
+    //         push 1
+    //         halt"#,
+    //     ).unwrap();
+    //     assert_eq!(vm.run(), Ok(1));
+    // }
 
     #[test]
     fn test_copy() {
@@ -411,8 +594,12 @@ mod tests {
        test_instr("div", &[10, 2], 5);
    }
    #[test]
+   fn test_not() {
+       test_instr("not", &[1], 0);
+   }
+   #[test]
    fn test_neg() {
-       test_instr("neg", &[1], 0);
+       test_instr("neg", &[10], -10);
    }
    #[test]
    fn test_leq() {

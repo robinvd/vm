@@ -4,6 +4,7 @@ extern crate combine;
 
 mod parser;
 mod vm;
+mod compiler;
 
 use std::fs;
 use std::io::{self, Read};
@@ -30,6 +31,11 @@ fn main() {
                 .help("debug mode, print VM state and wait for input on every loop")
                 .requires("input"),
         ).arg(
+            Arg::with_name("bytecode")
+                .short("b")
+                .long("bytecode")
+                .help("compile bytecode instead of normal code"),
+        ).arg(
             Arg::with_name("verbose")
                 .short("v")
                 .long("verbose")
@@ -49,15 +55,30 @@ fn main() {
         .unwrap()
         .read_to_string(&mut input)
         .unwrap();
-    vm.parse_ir(&input).unwrap();
+
+    if matches.is_present("bytecode") {
+        vm.parse_ir_block("main", &input).unwrap();
+    } else {
+        use combine::Parser;
+        let i: &str = &input;
+        let parsed = parser::code::parse_file().easy_parse(i).expect("failed to parse");
+        add_main(&mut vm).expect("failed to add main");
+        compiler::compile(&mut vm, &parsed.0).expect("failed to compile");
+    }
 
     if matches.is_present("verbose") {
         println!("start state:\n{:?}", vm);
     }
 
-    let result = vm.run();
+    let mut f = vm.new_fiber("start").expect("failed to make fiber");
+    let result = f.run();
 
     if matches.is_present("verbose") {
         println!("result: {:?}", result);
     }
+}
+
+fn add_main(vm: &mut vm::VM) -> Result<(), vm::VMError> {
+    vm.parse_ir_block("start", "push 0\ncall main\nhalt")?;
+    Ok(())
 }

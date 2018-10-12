@@ -1,6 +1,6 @@
 use combine::range::{take_while, take_while1};
 use combine::{
-    choice, eof, many, many1, one_of, optional, r#try, token, ParseError, Parser,
+    choice, eof, many, many1, one_of, optional, attempt, token, ParseError, Parser,
     RangeStream, Stream,
 };
 
@@ -11,6 +11,7 @@ pub enum Arg<'a> {
     Text(&'a str),
     Int(isize),
 }
+
 #[derive(Debug, PartialEq)]
 pub struct Instr<'a> {
     pub label: Option<&'a str>,
@@ -19,13 +20,12 @@ pub struct Instr<'a> {
 }
 
 impl<'a> Instr<'a> {
-    fn new(label: Option<&'a str>, instr: &'a str, arg: Option<Arg<'a>>) -> Self {
+    pub fn new(label: Option<&'a str>, instr: &'a str, arg: Option<Arg<'a>>) -> Self {
         Self { label, instr, arg }
     }
 }
 
 pub fn parse_instr<'a, I>() -> impl Parser<Input = I, Output = Instr<'a>>
-// where I: RangeStream<Item = u8, Range = &'a [u8]>,
 where
     I: RangeStream<Item = char, Range = &'a str>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
@@ -47,12 +47,13 @@ where
     let argument = choice((word().map(|t| Arg::Text(t)), int().map(|i| Arg::Int(i))));
 
     struct_parser!(Instr {
-        label: optional(r#try(word().skip(single(':')))),
+        label: optional(attempt(word().skip(single(':')))),
         instr: word(),
-        arg: optional(r#try(argument)),
-        _: choice((token('\n').map(|_| ()), eof())),
+        arg: optional(attempt(argument)),
+        _: choice((token('\n').skip(skip_space()).map(|_| ()), eof())),
     })
 }
+
 
 #[cfg(test)]
 mod tests {
