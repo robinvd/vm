@@ -1,0 +1,25 @@
+bc add(a,b) {
+    add
+    ret
+}
+
+bc print(a) {
+    print
+    ret
+}
+
+fn main() {
+    let res = 0
+    let x = 0
+    if x {
+        res = add(res, 1)
+    } else {
+        res = add(res, 3)
+    }
+
+    if 0 {
+        res = add(res, 5)
+    }
+
+    print(res)
+}

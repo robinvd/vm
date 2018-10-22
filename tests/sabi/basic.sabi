@@ -1,0 +1,53 @@
+bc add(a,b) {
+    add
+    ret
+}
+
+bc neg(a) {
+    neg
+    ret
+}
+
+bc sub(a,b) {
+    neg
+    add
+    ret
+}
+
+bc print(a) {
+    print
+    ret
+}
+
+fn test(a) {
+    print(a)
+}
+
+fn main() {
+    let a = 3
+    let x = 5
+    let y = 10
+    a = 2
+    print(a)
+    print(add(add(1,2), sub(2, add(5,7))))
+
+    a = 20
+    while a {
+        print(a)
+        a = sub(a, 1)
+    }
+
+    a = sub(0, 10)
+    while a {
+        a = add(a,1)
+        print(a)
+    }
+
+    test(100)
+
+    if 0 {
+        print(24)
+    } else {
+        print(25)
+    }
+}

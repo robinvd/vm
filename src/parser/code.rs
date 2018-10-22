@@ -1,8 +1,8 @@
-use combine::range::{take_while, take_while1, recognize};
 use combine::char::{letter, string};
+use combine::range::{recognize, take_while, take_while1};
 use combine::{
-    choice, eof, many, many1, one_of, optional, r#try, token, ParseError, Parser,
-    RangeStream, Stream, satisfy, between, sep_by, attempt
+    attempt, between, choice, eof, many, many1, one_of, optional, sep_by, sep_by1, ParseError, Parser,
+    RangeStream,
 };
 
 use crate::parser::*;
@@ -25,7 +25,15 @@ pub struct BcFunction<'a> {
 pub enum TopLevel<'a> {
     Function(Function<'a>),
     BcFunction(BcFunction<'a>),
+    // Use(UseTree<'a>),
+    Use(Vec<&'a str>),
 }
+
+// #[derive(Debug, PartialEq)]
+// pub enum UseTree<'a> {
+//     Leaf(&'a str),
+//     Node(&'a str, Vec<UseTree<'a>>),
+// }
 
 #[derive(Debug, PartialEq)]
 pub enum Expr<'a> {
@@ -33,7 +41,9 @@ pub enum Expr<'a> {
     Call(&'a str, Vec<Expr<'a>>),
     Var(&'a str),
     While(Box<Expr<'a>>, Vec<Expr<'a>>),
-    Assignment(&'a str, Box<Expr<'a>>),
+    If(Box<Expr<'a>>, Vec<Expr<'a>>, Option<Vec<Expr<'a>>>),
+    Let(&'a str, Box<Expr<'a>>),
+    Assign(&'a str, Box<Expr<'a>>),
 }
 
 pub fn skip_whitespace<'a, I>() -> impl Parser<Input = I, Output = &'a str>
@@ -49,10 +59,7 @@ where
     I: RangeStream<Item = char, Range = &'a str>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
 {
-    let parser = (
-        letter(),
-        take_while(|c: char| c.is_alphanumeric()),
-    );
+    let parser = (letter(), take_while(|c: char| c.is_alphanumeric()));
     recognize(parser).skip(skip_whitespace())
 }
 
@@ -63,8 +70,17 @@ parser!{
         I::Error: ParseError<I::Item, I::Range, I::Position>,
     ]
     {
-        string(s).skip(skip_whitespace()).map(|_| &())
+        attempt(string(s).skip(skip_whitespace()).map(|_| &()))
     }
+}
+
+pub fn use_parse<'a, I>() -> impl Parser<Input = I, Output = TopLevel<'a>>
+where
+    I: RangeStream<Item = char, Range = &'a str>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>,
+{
+    (text("use"), sep_by1(ident(), text("::")), text(";"))
+        .map(|(_, vals, _)| TopLevel::Use(vals))
 }
 
 fn expr_<'a, I>() -> impl Parser<Input = I, Output = Expr<'a>>
@@ -79,30 +95,46 @@ where
     };
 
     let call = || {
-        (ident(), between(text("("), text(")"), sep_by(expr(), text(","))))
+        (
+            ident(),
+            between(text("("), text(")"), sep_by(expr(), text(","))),
+        )
     };
 
-    let assignment = || {
-        (text("let"), ident(), text("="), expr())
-    };
+    let init = || (text("let"), ident(), text("="), expr());
+    let assignment = || attempt((ident(), text("="), expr()));
 
     let wh = || {
         (
             text("while"),
             expr(),
-            between(text("{"), text("}"), many(expr()))
+            between(text("{"), text("}"), many(expr())),
+        )
+    };
+    
+    let if_ = || {
+        (
+            text("if"),
+            expr(),
+            between(text("{"), text("}"), many(expr())),
+            optional(
+                text("else").with(
+                    between(text("{"), text("}"), many(expr())),
+                )
+            )
         )
     };
 
     choice((
-        assignment().map(|(_, n, _, b)| Expr::Assignment(n, Box::new(b))),
+        assignment().map(|(n, _, b)| Expr::Assign(n, Box::new(b))),
+        init().map(|(_, n, _, b)| Expr::Let(n, Box::new(b))),
         wh().map(|(_, pred, body)| Expr::While(Box::new(pred), body)),
+        if_().map(|(_, pred, t_body, f_body)| Expr::If(Box::new(pred), t_body, f_body)),
         int().map(|x| Expr::Lit(x)),
-        attempt(call()).map(|(n, a)| Expr::Call(n,a)),
+        attempt(call()).map(|(n, a)| Expr::Call(n, a)),
         ident().map(|n| Expr::Var(n)),
     ))
 }
-
 
 pub fn function<'a, I>() -> impl Parser<Input = I, Output = TopLevel<'a>>
 where
@@ -138,7 +170,11 @@ where
     between(
         skip_whitespace(),
         eof(),
-        many(choice((function(), bc_function()))),
+        many(choice((
+            function(),
+            bc_function(),
+            use_parse(),
+        ))),
     )
 }
 
@@ -168,7 +204,10 @@ mod tests {
         assert_eq!(result, Ok((Expr::Call("print", vec![Expr::Lit(2)]), "")));
 
         let result = expr().easy_parse("add(1,2) ");
-        assert_eq!(result, Ok((Expr::Call("add", vec![Expr::Lit(1),Expr::Lit(2)]), "")));
+        assert_eq!(
+            result,
+            Ok((Expr::Call("add", vec![Expr::Lit(1), Expr::Lit(2)]), ""))
+        );
 
         let result = expr().easy_parse("xvar");
         assert_eq!(result, Ok((Expr::Var("xvar"), "")));
@@ -179,15 +218,17 @@ mod tests {
         let result = parse_file().easy_parse("fn test(a, b) {print(a) print(b)}");
         assert_eq!(
             result,
-            Ok((vec![
-                TopLevel::Function(Function{
-                name: "test",
-                args: vec!["a", "b"],
-                body: vec![
-                    Expr::Call("print", vec![Expr::Var("a")]),
-                    Expr::Call("print", vec![Expr::Var("b")])
-                ]
-            })], "")),
+            Ok((
+                vec![TopLevel::Function(Function {
+                    name: "test",
+                    args: vec!["a", "b"],
+                    body: vec![
+                        Expr::Call("print", vec![Expr::Var("a")]),
+                        Expr::Call("print", vec![Expr::Var("b")])
+                    ]
+                })],
+                ""
+            )),
         );
     }
 
@@ -196,14 +237,14 @@ mod tests {
         let result = parse_file().easy_parse("bc test(a, b) {add\n}");
         assert_eq!(
             result,
-            Ok((vec![
-                TopLevel::BcFunction(BcFunction{
-                name: "test",
-                args: vec!["a", "b"],
-                body: vec![
-                    bytecode::Instr::new(None, "add", None)
-                ]
-            })], "")),
+            Ok((
+                vec![TopLevel::BcFunction(BcFunction {
+                    name: "test",
+                    args: vec!["a", "b"],
+                    body: vec![bytecode::Instr::new(None, "add", None)]
+                })],
+                ""
+            )),
         );
     }
 }

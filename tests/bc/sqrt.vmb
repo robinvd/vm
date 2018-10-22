@@ -12,7 +12,7 @@ loop: nop
     copy 2
     leq
     jmpz end
-    push 1
+    const 1
     add
     copy 0
     jmp loop

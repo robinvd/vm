@@ -1,0 +1,22 @@
+bc add(a,b) {
+    add
+    ret
+}
+
+bc leq(a,b) {
+    leq
+    ret
+}
+
+bc print(b) {
+    print
+    ret
+}
+
+fn main() {
+    let x = 0
+    while leq(x, 3) {
+        x = add(x, 1)
+        print(x)
+    }
+}

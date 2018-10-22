@@ -2,9 +2,12 @@ extern crate regex;
 #[macro_use]
 extern crate combine;
 
+mod compiler;
 mod parser;
 mod vm;
-mod compiler;
+
+#[cfg(test)]
+mod tests;
 
 use std::fs;
 use std::io::{self, Read};
@@ -61,7 +64,9 @@ fn main() {
     } else {
         use combine::Parser;
         let i: &str = &input;
-        let parsed = parser::code::parse_file().easy_parse(i).expect("failed to parse");
+        let parsed = parser::code::parse_file()
+            .easy_parse(i)
+            .expect("failed to parse");
         add_main(&mut vm).expect("failed to add main");
         compiler::compile(&mut vm, &parsed.0).expect("failed to compile");
     }
@@ -79,6 +84,6 @@ fn main() {
 }
 
 fn add_main(vm: &mut vm::VM) -> Result<(), vm::VMError> {
-    vm.parse_ir_block("start", "push 0\ncall main\nhalt")?;
+    vm.parse_ir_block("start", ".data\n0\n.code\nconst 0\ncall main\nhalt")?;
     Ok(())
 }
