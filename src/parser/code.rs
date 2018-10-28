@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use combine::char::{letter, string};
 use combine::range::{recognize, take_while, take_while1};
 use combine::{
@@ -6,7 +8,7 @@ use combine::{
 };
 
 use crate::parser::*;
-use crate::vm::value::Value;
+use crate::vm::value::{GCObject, Object, Value};
 
 #[derive(Debug, PartialEq)]
 pub struct Function<'a> {
@@ -125,6 +127,36 @@ parser!{
     }
 }
 
+parser!{
+    pub fn literal['a, I]()(I) -> Value
+    where [
+        I: RangeStream<Item = char, Range = &'a str>,
+        I::Error: ParseError<I::Item, I::Range, I::Position>,
+    ]
+    {
+        choice((
+            float().map(Value::Number),
+            text("True").map(|_| Value::True),
+            text("False").map(|_| Value::False),
+            text("Nil").map(|_| Value::Nil),
+            between(
+                text("["), text("]"),
+                sep_by(literal(), text(","))
+            ).map(|ls| Value::Object(GCObject::new(Object::List(ls)))),
+            between(
+                text("{"), text("}"),
+                sep_by((literal().skip(text("=")), literal()), text(","))
+            ).map(|ls: Vec<(Value, Value)>| {
+                let mut hm = HashMap::new();
+                for (k, v) in ls {
+                    hm.insert(k,v);
+                }
+                Value::Object(GCObject::new(Object::Map(hm)))
+            }),
+        ))
+    }
+}
+
 fn expr_<'a, I>() -> impl Parser<Input = I, Output = Expr<'a>>
 where
     I: RangeStream<Item = char, Range = &'a str>,
@@ -172,7 +204,8 @@ where
         init().map(|(_, n, _, b)| Expr::Let(n, b)),
         wh().map(|(_, pred, body)| Expr::While(Box::new(pred), body)),
         if_().map(|(_, pred, t_body, f_body)| Expr::If(Box::new(pred), t_body, f_body)),
-        float().map(|x| Expr::Lit(Value::Number(x))),
+        // float().map(|x| Expr::Lit(Value::Number(x))),
+        literal().map(Expr::Lit),
         attempt(call()).map(|(n, a)| Expr::Call(n, a)),
         ident().map(Expr::Var),
         // arg_list(expr).map(Expr::Tuple),

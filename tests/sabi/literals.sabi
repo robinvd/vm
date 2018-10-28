@@ -1,0 +1,17 @@
+bc print(a) {
+    print
+    ret
+}
+
+fn main() {
+    let number = 1
+    let number2 = 1.1
+
+    let none = Nil
+
+    let list = [1,2]
+    print(list)
+
+    let map = {1=2, 3=4}
+    print(map)
+}

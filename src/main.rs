@@ -1,3 +1,5 @@
+#![recursion_limit = "1000"] 
+
 extern crate regex;
 #[macro_use]
 extern crate combine;
