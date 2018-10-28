@@ -3,13 +3,22 @@
 
 use crate::compiler;
 use crate::parser;
-use crate::vm::{VM, VMError, value::Value};
+use crate::vm::{value::Value, VMError, VM};
 
 use combine::Parser;
 use std::io::Read;
 
+const ENTRY: &'static str = r#"
+    .data
+    0
+    .code
+    const 0
+    call main
+    halt
+"#;
+
 fn add_main(vm: &mut VM) -> Result<(), VMError> {
-    vm.parse_ir_block("start", "push 0\ncall main\nhalt")?;
+    vm.parse_ir_block("start", ENTRY)?;
     Ok(())
 }
 
@@ -56,4 +65,11 @@ fn test_sqrt() {
     let (out, res) = test_file("tests/sabi/sqrt.sabi");
     assert_eq!(res, Ok(Value::Number(0.)));
     assert_eq!(out, b"1024\n");
+}
+
+#[test]
+fn test_function() {
+    let (out, res) = test_file("tests/sabi/function.sabi");
+    assert_eq!(res, Ok(Value::Number(0.)));
+    assert_eq!(out, b"1\n");
 }

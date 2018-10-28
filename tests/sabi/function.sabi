@@ -1,0 +1,14 @@
+bc print(a) {
+    print
+    ret
+}
+
+fn f(a) {
+    return a
+}
+
+fn main() {
+    let x = f(1)
+    let y,z = f(2),11
+    print(x)
+}

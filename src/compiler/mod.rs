@@ -46,7 +46,7 @@ impl<'a> Context<'a> {
             }
             Expr::Lit(i) => {
                 let loc = self.block.constants.len();
-                self.block.constants.push(crate::vm::value::Value::Number(*i as f64));
+                self.block.constants.push(*i);
                 self.add_opcode(vm, Opcode::Const, Some(&Arg::Int(loc as isize)))?;
             }
             Expr::While(p, body) => {
@@ -84,23 +84,44 @@ impl<'a> Context<'a> {
                 }
 
                 self.block.add_label(&end_label)?;
-
             }
-            Expr::Let(name, e) => {
-                let loc = self.insert_name(name);
-                self.compile_expr(vm, e)?;
-                self.add_opcode(vm, Opcode::Store, Some(&Arg::Int(loc as isize)))?;
+            Expr::Let(names, exprs) => {
+                if names.len() != exprs.len() {
+                    return Err(VMError::DifferentNArgs);
+                }
+
+                for (name, expr) in names.iter().zip(exprs.iter()) {
+                    let loc = self.insert_name(name);
+                    self.compile_expr(vm, expr)?;
+                    self.add_opcode(vm, Opcode::Store, Some(&Arg::Int(loc as isize)))?;
+                }
             }
             Expr::Var(name) => {
-                let loc = self.names.get(name).ok_or(VMError::Msg("local not found".to_owned()))?;
+                let loc = self
+                    .names
+                    .get(name)
+                    .ok_or(VMError::Msg("local not found".to_owned()))?;
                 self.add_opcode(vm, Opcode::Load, Some(&Arg::Int(*loc as isize)))?;
             }
             Expr::Assign(name, e) => {
-                let loc = *self.names.get(name).ok_or(VMError::Msg("local not found".to_owned()))?;
+                let loc = *self
+                    .names
+                    .get(name)
+                    .ok_or(VMError::Msg("local not found".to_owned()))?;
                 self.compile_expr(vm, e)?;
                 self.add_opcode(vm, Opcode::Store, Some(&Arg::Int(loc as isize)))?;
             }
-            _ => {}
+            Expr::Return(vals) => {
+                for v in vals.iter() {
+                    self.compile_expr(vm, v)?;
+                }
+                self.add_opcode(vm, Opcode::Ret, None)?;
+            }
+            Expr::Tuple(vals) => {
+                for v in vals.iter() {
+                    self.compile_expr(vm, v)?;
+                }
+            }
         }
 
         Ok(())
@@ -112,7 +133,9 @@ pub fn compile_f(vm: &mut VM, f: &Function) -> Result<(), VMError> {
 
     for ref a in f.args.iter() {
         let i = context.insert_name(&a);
-        context.block.add_opcode(vm, Opcode::Store, Some(&Arg::Int(i as isize)))?;
+        context
+            .block
+            .add_opcode(vm, Opcode::Store, Some(&Arg::Int(i as isize)))?;
     }
 
     for ref a in &f.body {

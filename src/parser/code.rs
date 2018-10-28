@@ -1,16 +1,18 @@
 use combine::char::{letter, string};
 use combine::range::{recognize, take_while, take_while1};
 use combine::{
-    attempt, between, choice, eof, many, many1, one_of, optional, sep_by, sep_by1, ParseError, Parser,
-    RangeStream,
+    attempt, between, choice, eof, many, many1, one_of, optional, sep_by, sep_by1, ParseError,
+    Parser, RangeStream,
 };
 
 use crate::parser::*;
+use crate::vm::value::Value;
 
 #[derive(Debug, PartialEq)]
 pub struct Function<'a> {
     pub name: &'a str,
     pub args: Vec<&'a str>,
+    pub n_returns: usize,
     pub body: Vec<Expr<'a>>,
 }
 
@@ -29,21 +31,17 @@ pub enum TopLevel<'a> {
     Use(Vec<&'a str>),
 }
 
-// #[derive(Debug, PartialEq)]
-// pub enum UseTree<'a> {
-//     Leaf(&'a str),
-//     Node(&'a str, Vec<UseTree<'a>>),
-// }
-
 #[derive(Debug, PartialEq)]
 pub enum Expr<'a> {
-    Lit(isize),
+    Lit(Value),
     Call(&'a str, Vec<Expr<'a>>),
+    Tuple(Vec<Expr<'a>>),
     Var(&'a str),
     While(Box<Expr<'a>>, Vec<Expr<'a>>),
     If(Box<Expr<'a>>, Vec<Expr<'a>>, Option<Vec<Expr<'a>>>),
-    Let(&'a str, Box<Expr<'a>>),
+    Let(Vec<&'a str>, Vec<Expr<'a>>),
     Assign(&'a str, Box<Expr<'a>>),
+    Return(Vec<Expr<'a>>),
 }
 
 pub fn skip_whitespace<'a, I>() -> impl Parser<Input = I, Output = &'a str>
@@ -64,6 +62,46 @@ where
 }
 
 parser!{
+    pub fn int['a, I]()(I) -> isize
+    where [
+        I: RangeStream<Item = char, Range = &'a str>,
+        I::Error: ParseError<I::Item, I::Range, I::Position>,
+    ]
+    {
+        take_while1(|c: char| is_num(c))
+            .skip(skip_whitespace())
+            .map(|s: &str| s.parse::<isize>().unwrap())
+    }
+}
+
+parser!{
+    pub fn float['a, I]()(I) -> f64
+    where [
+        I: RangeStream<Item = char, Range = &'a str>,
+        I::Error: ParseError<I::Item, I::Range, I::Position>,
+    ]
+    {
+        recognize((
+            take_while1(|c: char| is_num(c)),
+            optional((
+                string("."),
+                take_while1(|c: char| is_num(c)),
+            ))
+        ))
+            .skip(skip_whitespace())
+            .map(|s: &str| s.parse::<f64>().unwrap())
+    }
+}
+
+pub fn use_parse<'a, I>() -> impl Parser<Input = I, Output = TopLevel<'a>>
+where
+    I: RangeStream<Item = char, Range = &'a str>,
+    I::Error: ParseError<I::Item, I::Range, I::Position>,
+{
+    (text("use"), sep_by1(ident(), text("::")), text(";")).map(|(_, vals, _)| TopLevel::Use(vals))
+}
+
+parser!{
     pub fn text['a, I](s: &'static str)(I) -> &'a()
     where [
         I: RangeStream<Item = char, Range = &'a str>,
@@ -74,13 +112,17 @@ parser!{
     }
 }
 
-pub fn use_parse<'a, I>() -> impl Parser<Input = I, Output = TopLevel<'a>>
-where
-    I: RangeStream<Item = char, Range = &'a str>,
-    I::Error: ParseError<I::Item, I::Range, I::Position>,
-{
-    (text("use"), sep_by1(ident(), text("::")), text(";"))
-        .map(|(_, vals, _)| TopLevel::Use(vals))
+parser!{
+    pub fn arg_list['a, I, P, F, R](x: F)(I) -> Vec<R>
+    where [
+        I: RangeStream<Item = char, Range = &'a str>,
+        I::Error: ParseError<I::Item, I::Range, I::Position>,
+        P: Parser<Input=I, Output=R>,
+        F: FnMut() -> P,
+    ]
+    {
+        between(text("("), text(")"), sep_by1(x(), text(",")))
+    }
 }
 
 fn expr_<'a, I>() -> impl Parser<Input = I, Output = Expr<'a>>
@@ -88,12 +130,6 @@ where
     I: RangeStream<Item = char, Range = &'a str>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
 {
-    let int = || {
-        take_while1(|c: char| is_num(c))
-            .skip(skip_whitespace())
-            .map(|s: &str| s.parse::<isize>().unwrap())
-    };
-
     let call = || {
         (
             ident(),
@@ -101,8 +137,17 @@ where
         )
     };
 
-    let init = || (text("let"), ident(), text("="), expr());
+    let init = || {
+        (
+            text("let"),
+            sep_by1(ident(), text(",")),
+            text("="),
+            sep_by1(expr(), text(",")),
+        )
+    };
     let assignment = || attempt((ident(), text("="), expr()));
+
+    let ret = || (text("return"), sep_by(expr(), text(",")));
 
     let wh = || {
         (
@@ -111,28 +156,26 @@ where
             between(text("{"), text("}"), many(expr())),
         )
     };
-    
+
     let if_ = || {
         (
             text("if"),
             expr(),
             between(text("{"), text("}"), many(expr())),
-            optional(
-                text("else").with(
-                    between(text("{"), text("}"), many(expr())),
-                )
-            )
+            optional(text("else").with(between(text("{"), text("}"), many(expr())))),
         )
     };
 
     choice((
+        ret().map(|(_, b)| Expr::Return(b)),
         assignment().map(|(n, _, b)| Expr::Assign(n, Box::new(b))),
-        init().map(|(_, n, _, b)| Expr::Let(n, Box::new(b))),
+        init().map(|(_, n, _, b)| Expr::Let(n, b)),
         wh().map(|(_, pred, body)| Expr::While(Box::new(pred), body)),
         if_().map(|(_, pred, t_body, f_body)| Expr::If(Box::new(pred), t_body, f_body)),
-        int().map(|x| Expr::Lit(x)),
+        float().map(|x| Expr::Lit(Value::Number(x))),
         attempt(call()).map(|(n, a)| Expr::Call(n, a)),
-        ident().map(|n| Expr::Var(n)),
+        ident().map(Expr::Var),
+        // arg_list(expr).map(Expr::Tuple),
     ))
 }
 
@@ -145,8 +188,10 @@ where
         _: text("fn"),
         name: ident(),
         args: between(text("("), text(")"), sep_by(ident(), text(","))),
+        n_returns: optional(text("->").with(int().map(|x| x as usize))).map(|x| x.unwrap_or(0)),
         body: between(text("{"), text("}"), many(expr())),
-    }).map(|x| TopLevel::Function(x))
+    })
+    .map(|x| TopLevel::Function(x))
 }
 
 pub fn bc_function<'a, I>() -> impl Parser<Input = I, Output = TopLevel<'a>>
@@ -159,7 +204,8 @@ where
         name: ident(),
         args: between(text("("), text(")"), sep_by(ident(), text(","))),
         body: between(text("{"), text("}"), many(attempt(bytecode::parse_instr()))),
-    }).map(|x| TopLevel::BcFunction(x))
+    })
+    .map(|x| TopLevel::BcFunction(x))
 }
 
 pub fn parse_file<'a, I>() -> impl Parser<Input = I, Output = Vec<TopLevel<'a>>>
@@ -170,11 +216,7 @@ where
     between(
         skip_whitespace(),
         eof(),
-        many(choice((
-            function(),
-            bc_function(),
-            use_parse(),
-        ))),
+        many(choice((function(), bc_function(), use_parse()))),
     )
 }
 
@@ -192,21 +234,26 @@ parser!{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn number(x: f64) -> Expr<'static> {
+        Expr::Lit(Value::Number(x))
+    }
+
     #[test]
     fn expr_test() {
         let result = expr().easy_parse("1");
-        assert_eq!(result, Ok((Expr::Lit(1), "")));
+        assert_eq!(result, Ok((number(1.), "")));
 
         let result = expr().easy_parse("print(2)");
-        assert_eq!(result, Ok((Expr::Call("print", vec![Expr::Lit(2)]), "")));
+        assert_eq!(result, Ok((Expr::Call("print", vec![number(2.)]), "")));
 
         let result = expr().easy_parse("print(2) ");
-        assert_eq!(result, Ok((Expr::Call("print", vec![Expr::Lit(2)]), "")));
+        assert_eq!(result, Ok((Expr::Call("print", vec![number(2.)]), "")));
 
         let result = expr().easy_parse("add(1,2) ");
         assert_eq!(
             result,
-            Ok((Expr::Call("add", vec![Expr::Lit(1), Expr::Lit(2)]), ""))
+            Ok((Expr::Call("add", vec![number(1.), number(2.)]), ""))
         );
 
         let result = expr().easy_parse("xvar");
@@ -222,6 +269,7 @@ mod tests {
                 vec![TopLevel::Function(Function {
                     name: "test",
                     args: vec!["a", "b"],
+                    n_returns: 0,
                     body: vec![
                         Expr::Call("print", vec![Expr::Var("a")]),
                         Expr::Call("print", vec![Expr::Var("b")])

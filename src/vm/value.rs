@@ -1,17 +1,16 @@
 // use std::collections::HashMap;
+use std::fmt;
 
 use crate::vm::VMError;
 
 #[derive(Debug, Clone, Copy)]
 pub struct GCObject {
-    val: *mut Object
+    val: *mut Object,
 }
 
 impl GCObject {
     pub fn new(mut val: Object) -> Self {
-        Self {
-            val: &mut val
-        }
+        Self { val: &mut val }
     }
 }
 
@@ -19,9 +18,7 @@ impl std::ops::Deref for GCObject {
     type Target = Object;
 
     fn deref(&self) -> &Object {
-        unsafe {
-            &*self.val
-        }
+        unsafe { &*self.val }
     }
 }
 
@@ -32,7 +29,19 @@ pub enum Value {
     True,
     Number(f64),
 
-    GCObject,
+    Object,
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Value::Nil => write!(f, "Nil"),
+            Value::False => write!(f, "False"),
+            Value::True => write!(f, "True"),
+            Value::Number(n) => write!(f, "{}", n),
+            Value::Object => Ok(()),
+        }
+    }
 }
 
 impl Value {
@@ -46,8 +55,8 @@ impl Value {
 
     pub fn binary_op(self, v: Value, f: impl FnOnce(f64, f64) -> Value) -> Result<Value, VMError> {
         if let Value::Number(a) = self {
-            if let Value::Number(b) = v{
-                Ok(f(a,b))
+            if let Value::Number(b) = v {
+                Ok(f(a, b))
             } else {
                 Err(VMError::RuntimeError("combine not numbers".to_owned()))
             }

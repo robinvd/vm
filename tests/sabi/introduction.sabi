@@ -1,0 +1,171 @@
+// # sabi 
+//
+// sabi is supposed to be a language between rust and lua
+//
+// dynamic
+// embeddable
+// garbage collected
+// more sophisticated module system than lua
+// fast?
+
+// # toplevel items
+
+// functions
+fn f(arg1, arg2) {
+    return 1
+}
+
+// values
+let toplevel_value = 0
+
+// structs
+struct toplevel_struct {
+    pub x,
+    pub y,
+}
+
+// struct impl
+impl toplevel_struct {
+    fn add(self, other) {
+        self.x += other.x
+        self.y += other.y
+    }
+}
+
+// the global namespace is static
+// so all globals have to be defined at compile time
+let global_variable = 3
+
+// like rust there no global expressions (unlike lua)
+// this wouldnt compile outside a function
+// `print(1)`
+
+//
+
+// # expressions
+// basic syntax is like rust:
+fn f() {
+    // new variables
+    let x = 1
+
+    // update variables
+    x = 2
+
+    // booleans
+    let t = True
+
+    // strings
+    let str = "hello world"
+
+    // list
+    let vec = [1,"string",3.5, [1,2]]
+    let first = vec[0] // => 1
+
+    // maps
+    let map = {1 = 5, 2 = "hello"}
+    let two = map[2] // => "hello"
+
+    // if statements
+    if True {
+        print("true!")
+    } else {
+        print("false")
+    }
+
+    // while
+    let cond = True
+    while cond {
+        print("while")
+        cond = False
+    }
+
+    // loop
+    loop {
+        print("loop")
+
+        // break out of loops (loop, while, for)
+        break
+    }
+
+    // for loop
+    for x in [1,2,3] {
+        print(x)
+    } // => prints "1\n2\n3"
+
+    // closure/lambda
+    let print_plus_one = |x| {
+        print(x + 1)
+    }
+
+    print_plus_one(3) => prints "4"
+}
+
+// # discussion and ideas:
+
+// ## modules
+// ### prior art
+// lua just uses tables
+//   very simple, very dynamic, very implicit, does not work with our static global env
+// rust
+//   decent complexity, very static, very explicit
+
+// ## multiple return values
+fn ret3() -> 3 {
+    return 1,2,3
+}
+
+fn multiret() -> 0 {
+    let a,b,c = ret3()
+    let (a,b,c),x = ret3(), 12
+}
+
+// but higher order functions?
+fn addone(f) -> 1 {
+    -- what if f return multiple values -> treat as tuple? -> thus error "cant (+) between tuple and number"
+    return f() + 1
+}
+
+// we dont know how many vals f returns, so what does this return
+// -? use '?' to indicate any number of vals
+//  -> then might as well not do that and make ret vals untyped
+fn returnwhat(f) -> ? {
+    f()
+}
+
+// or multiple branches
+// -> return nil in the left out vals
+fn return2or3() -> ? {
+    if true {
+        return 1,2
+    } else {
+        return 1,2,3
+    }
+}
+
+// ## types
+// - optional types? (typestript, python)
+// - sound barriers? (typed-racket)
+//
+// traits or duck typing?
+
+// ## metaprogramming
+// - deriving!
+
+// ## tools
+// ### docs
+// project docs
+// - generate docs file like cargo docs
+// - literal file like this one
+//
+// language docs
+// - book?
+// - sabi by example?
+// - online try?
+
+// ### package manager
+// prior art:
+// - cargo
+// - nix
+
+// ### testing
+// in the package manager, like cargo

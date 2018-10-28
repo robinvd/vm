@@ -71,8 +71,8 @@ mod tests {
             Ok((Instr::new(None, "pop", None), "")),
         );
         assert_eq!(
-            parse_instr().easy_parse("push 1\n"),
-            Ok((Instr::new(None, "push", Some(Arg::Int(1))), "")),
+            parse_instr().easy_parse("const 1\n"),
+            Ok((Instr::new(None, "const", Some(Arg::Int(1))), "")),
         );
     }
 }

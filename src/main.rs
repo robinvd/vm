@@ -27,24 +27,28 @@ fn main() {
                 .value_name("FILE")
                 .help("Sets a custom config file")
                 .takes_value(true),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("debug")
                 .short("d")
                 .long("debug")
                 .help("debug mode, print VM state and wait for input on every loop")
                 .requires("input"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("bytecode")
                 .short("b")
                 .long("bytecode")
                 .help("compile bytecode instead of normal code"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("verbose")
                 .short("v")
                 .long("verbose")
                 .multiple(true)
                 .help("Sets the level of verbosity"),
-        ).get_matches();
+        )
+        .get_matches();
 
     let mut vm = vm::VM::default();
     if matches.is_present("debug") {

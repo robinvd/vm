@@ -16,12 +16,13 @@ use self::opcode::Opcode;
 #[derive(Clone, Debug, PartialEq)]
 pub enum VMError {
     Halt,
+    RuntimeError(String),
     ParseErr(String),
     WrongOpCode,
     EmptyPop,
     CombineErr(String),
     Msg(String),
-    RuntimeError(String),
+    DifferentNArgs,
 }
 
 // static (read only) and state part
@@ -113,7 +114,8 @@ impl<'a> FState<'a> {
     pub fn advance_u16(&mut self) -> u16 {
         // let slice = &self.current_block.code.as_slice()[self.code_ptr..self.code_ptr + 8].as_ptr();
         // let num: i64 = unsafe { *(*slice as *const i64) };
-        let num = (self.current_block.code[self.code_ptr] as u16) << 4 | self.current_block.code[self.code_ptr + 1] as u16;
+        let num = (self.current_block.code[self.code_ptr] as u16) << 4
+            | self.current_block.code[self.code_ptr + 1] as u16;
         self.code_ptr += 2;
 
         num
@@ -193,22 +195,22 @@ impl<'a, 'write> Fiber<'a, 'write> {
             Opcode::Print => {
                 let val = self.pop()?;
                 let mut data = self.base.output.lock().unwrap();
-                writeln!(data, "{:?}", val);
+                writeln!(data, "{}", val);
             }
             Opcode::Add => {
                 let a = self.pop()?;
                 let b = self.pop()?;
-                self.push(Value::binary_op(a,b,|a,b| Value::Number(a + b))?);
+                self.push(Value::binary_op(a, b, |a, b| Value::Number(a + b))?);
             }
             Opcode::Mul => {
                 let a = self.pop()?;
                 let b = self.pop()?;
-                self.push(Value::binary_op(a,b,|a,b| Value::Number(a * b))?);
+                self.push(Value::binary_op(a, b, |a, b| Value::Number(a * b))?);
             }
             Opcode::Div => {
                 let a = self.pop()?;
                 let b = self.pop()?;
-                self.push(Value::binary_op(a,b,|a,b| Value::Number(a / b))?);
+                self.push(Value::binary_op(a, b, |a, b| Value::Number(a / b))?);
             }
             Opcode::Neg => {
                 let a = self.pop()?;
@@ -219,13 +221,17 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 self.push(a.not());
             }
             Opcode::LEQ => {
-                // push a, push b, leq == a <= b
                 let a = self.pop()?;
                 let b = self.pop()?;
-                self.push(Value::binary_op(a,b, |a,b| if a <= b {Value::False} else {Value::True})?);
+                self.push(Value::binary_op(a, b, |a, b| {
+                    if a <= b {
+                        Value::False
+                    } else {
+                        Value::True
+                    }
+                })?);
             }
             Opcode::Jmp => {
-                // let x = self.pop()?;
                 let x = self.current_f().advance_u16();
                 self.current_f().jump_to_label_index(x as usize)?;
             }
