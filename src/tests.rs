@@ -78,5 +78,5 @@ fn test_function() {
 fn test_literals() {
     let (out, res) = test_file("tests/sabi/literals.sabi");
     assert_eq!(res, Ok(Value::Number(0.)));
-    assert_eq!(out, b"[1, 2]\n{1 = 2, 3 = 4}\n");
+    assert_eq!(out, b"[1, 2]\n{1 = 2}\n");
 }
