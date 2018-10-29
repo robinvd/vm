@@ -1,4 +1,4 @@
-#![recursion_limit = "1000"] 
+#![recursion_limit = "1000"]
 
 extern crate regex;
 #[macro_use]
@@ -17,7 +17,7 @@ use std::io::{self, Read};
 use clap::{App, Arg};
 
 fn main() {
-    let matches = App::new("RL VM")
+    let matches = App::new("SABI VM")
         .version("1.0")
         .author("Robin <robinjint@gmail.com>")
         .about("A stack based VM in rust")
@@ -55,6 +55,7 @@ fn main() {
     let mut vm = vm::VM::default();
     vm.register_basic();
     vm.register_io();
+    vm.register_internal();
     if matches.is_present("debug") {
         vm.debug = true;
     }

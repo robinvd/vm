@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use combine::char::{letter, string};
 use combine::range::{recognize, take_while, take_while1};
 use combine::{
-    attempt, between, choice, eof, many, many1, one_of, optional, sep_by, sep_by1, ParseError,
-    Parser, RangeStream, any
+    any, attempt, between, choice, eof, many, many1, one_of, optional, sep_by, sep_by1, ParseError,
+    Parser, RangeStream,
 };
 
 use crate::parser::*;
@@ -60,7 +60,10 @@ where
     I: RangeStream<Item = char, Range = &'a str>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
 {
-    let parser = (letter(), take_while(|c: char| c.is_alphanumeric() || c == '_'));
+    let parser = (
+        letter(),
+        take_while(|c: char| c.is_alphanumeric() || c == '_'),
+    );
     recognize(parser).skip(skip_whitespace())
 }
 
@@ -136,14 +139,14 @@ parser!{
     ]
     {
         choice((
-            float().map(Value::Number),
+            float().map(Value::number),
             text("True").map(|_| Value::True),
             text("False").map(|_| Value::False),
             text("Nil").map(|_| Value::Nil),
             between(
                 text("["), text("]"),
                 sep_by(literal(), text(","))
-            ).map(|ls| Value::Object(GCObject::new(Object::List(ls)))),
+            ).map(|ls| Value::object(Object::List(ls))),
             between(
                 text("{"), text("}"),
                 sep_by((literal().skip(text("=")), literal()), text(","))
@@ -152,16 +155,16 @@ parser!{
                 for (k, v) in ls {
                     hm.insert(k,v);
                 }
-                Value::Object(GCObject::new(Object::Map(hm)))
+                Value::object(Object::Map(hm))
             }),
             between(
                 text("\""), text("\""),
                 take_while(|c| c != '"'),
-            ).map(|s: &str| Value::Object(GCObject::new(Object::String(s.to_owned())))),
+            ).map(|s: &str| Value::object(Object::String(s.to_owned()))),
             between(
                 text("'"), text("'"),
                 any(),
-            ).map(|c: char| Value::Number(c as i64 as f64)),
+            ).map(|c: char| Value::number(c as i64 as f64)),
         ))
     }
 }
@@ -215,9 +218,9 @@ where
         init().map(|(_, n, _, b)| Expr::Let(n, b)),
         wh().map(|(_, pred, body)| Expr::While(Box::new(pred), body)),
         if_().map(|(_, pred, t_body, f_body)| Expr::If(Box::new(pred), t_body, f_body)),
-        // float().map(|x| Expr::Lit(Value::Number(x))),
+        // float().map(|x| Expr::Lit(Value::number(x))),
         literal().map(Expr::Lit),
-        attempt(index().map(|(v,i)| Expr::Index(Box::new(Expr::Var(v)),Box::new(i)))),
+        attempt(index().map(|(v, i)| Expr::Index(Box::new(Expr::Var(v)), Box::new(i)))),
         attempt(call()).map(|(n, a)| Expr::Call(n, a)),
         ident().map(Expr::Var),
         // arg_list(expr).map(Expr::Tuple),
@@ -281,7 +284,7 @@ mod tests {
     use super::*;
 
     fn number(x: f64) -> Expr<'static> {
-        Expr::Lit(Value::Number(x))
+        Expr::Lit(Value::number(x))
     }
 
     #[test]
@@ -305,7 +308,8 @@ mod tests {
         assert_eq!(result, Ok((Expr::Var("xvar"), "")));
 
         let result = expr().easy_parse("var[var[var[1]]]");
-        assert_eq!(result, 
+        assert_eq!(
+            result,
             Ok((
                 Expr::Index(
                     Box::new(Expr::Var("var")),
@@ -313,7 +317,7 @@ mod tests {
                         Box::new(Expr::Var("var")),
                         Box::new(Expr::Index(
                             Box::new(Expr::Var("var")),
-                            Box::new(Expr::Lit(Value::Number(1.0)))
+                            Box::new(Expr::Lit(Value::number(1.0)))
                         ))
                     ))
                 ),

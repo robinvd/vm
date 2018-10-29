@@ -1,4 +1,5 @@
 // use std::collections::HashMap;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
 use std::ptr::NonNull;
@@ -7,13 +8,13 @@ use ordered_float::OrderedFloat;
 
 use crate::vm::VMError;
 
-#[derive(Debug, Clone, Copy, Hash, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct GCObject {
-    val: NonNull<Object>,
+    pub val: NonNull<ObjectInfo>,
 }
 
 impl GCObject {
-    pub fn new(val: Object) -> Self {
+    pub fn new(val: ObjectInfo) -> Self {
         let b = Box::new(val);
         unsafe {
             Self {
@@ -21,45 +22,52 @@ impl GCObject {
             }
         }
     }
+
+    pub fn deep_clone(&self) -> GCObject {
+        let val = unsafe { self.val.as_ref() };
+        Self::new((*val).clone())
+    }
+
+    pub fn object_info(&self) -> &ObjectInfo {
+        unsafe { self.val.as_ref() }
+    }
 }
 
 impl std::ops::Deref for GCObject {
     type Target = Object;
 
     fn deref(&self) -> &Object {
-        unsafe { self.val.as_ref() }
+        unsafe { self.val.as_ref().val() }
     }
 }
 
-impl std::cmp::PartialEq for GCObject {
-    fn eq(&self, other: &Self) -> bool {
-        unsafe { self.val.as_ref() == other.val.as_ref() }
-    }
+pub trait Traverse {
+    fn traverse<F>(&self, f: &mut F)
+    where
+        F: FnMut(&Value);
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Value {
     Nil,
     False,
     True,
-    Number(f64),
+    Number(OrderedFloat<f64>),
 
     Object(GCObject),
 }
 
-impl std::hash::Hash for Value {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let len = std::mem::size_of::<Self>();
-        let byteptr = self as *const _ as *const u8;
-        for i in 0..len as isize {
-            unsafe {
-                (*byteptr.offset(i)).hash(state);
-            }
+impl Traverse for Value {
+    fn traverse<F>(&self, f: &mut F)
+    where
+        F: FnMut(&Value),
+    {
+        if let Value::Object(o) = self {
+            f(self);
+            o.traverse(f);
         }
     }
 }
-
-impl std::cmp::Eq for Value {}
 
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -75,17 +83,23 @@ impl fmt::Display for Value {
 }
 
 impl Value {
+    pub fn deep_clone(&self) -> Self {
+        match self {
+            Value::Object(o) => Value::Object(o.deep_clone()),
+            x => x.clone(),
+        }
+    }
+
     pub fn is_true(self) -> bool {
-        if self == Value::False || self == Value::Nil {
-            false
-        } else {
-            true
+        match self {
+            Value::False | Value::Nil => false,
+            _ => true,
         }
     }
 
     pub fn binary_op(self, v: Value, f: impl FnOnce(f64, f64) -> Value) -> Result<Value, VMError> {
-        if let Value::Number(a) = self {
-            if let Value::Number(b) = v {
+        if let Some(a) = self.as_number() {
+            if let Some(b) = v.as_number() {
                 Ok(f(a, b))
             } else {
                 Err(VMError::RuntimeError("combine not numbers".to_owned()))
@@ -96,8 +110,8 @@ impl Value {
     }
 
     pub fn unary_op(self, f: impl FnOnce(f64) -> f64) -> Result<Value, VMError> {
-        if let Value::Number(a) = self {
-            Ok(Value::Number(f(a)))
+        if let Some(a) = self.as_number() {
+            Ok(Value::number(f(a)))
         } else {
             Err(VMError::RuntimeError("combine not numbers".to_owned()))
         }
@@ -111,16 +125,23 @@ impl Value {
         }
     }
 
-    pub fn as_number(self) -> Result<f64, VMError> {
-        match self {
-            Value::Number(n) => Ok(n),
-            _ => Err(VMError::InvalidConversion),
-
+    pub fn as_number(self) -> Option<f64> {
+        if let Value::Number(of) = self {
+            Some(*of)
+        } else {
+            None
         }
     }
 
-    pub fn as_int(self) -> Result<isize, VMError> {
-        self.as_number().map(|x| x.round() as isize)
+    pub fn to_number(self) -> Result<f64, VMError> {
+        match self {
+            Value::Number(n) => Ok(*n),
+            _ => Err(VMError::InvalidConversion),
+        }
+    }
+
+    pub fn to_int(self) -> Result<isize, VMError> {
+        self.to_number().map(|x| x.round() as isize)
     }
 
     pub fn index(&self, i: Value) -> Result<Value, VMError> {
@@ -130,8 +151,58 @@ impl Value {
         }
     }
 
+    pub fn number(f: f64) -> Value {
+        Value::Number(OrderedFloat(f))
+    }
+
     pub fn object(o: Object) -> Value {
-        Value::Object(GCObject::new(o))
+        Value::Object(GCObject::new(ObjectInfo::new(o)))
+    }
+
+    pub fn get_object(&self) -> Option<&Object> {
+        match self {
+            Value::Object(o) => Some(o),
+            _ => None,
+        }
+    }
+
+    pub fn get_object_info(&self) -> Option<&ObjectInfo> {
+        match self {
+            Value::Object(o) => Some(o.object_info()),
+            _ => None,
+        }
+    }
+
+    pub fn get_object_gcobj(self) -> Option<GCObject> {
+        match self {
+            Value::Object(o) => Some(o),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ObjectInfo {
+    pub mark: Cell<bool>,
+    val: Object,
+}
+
+impl ObjectInfo {
+    pub fn new(val: Object) -> Self {
+        Self {
+            mark: Cell::new(false),
+            val: val,
+        }
+    }
+
+    pub fn val(&self) -> &Object {
+        &self.val
+    }
+}
+
+impl std::cmp::PartialEq for ObjectInfo {
+    fn eq(&self, other: &Self) -> bool {
+        self.val.eq(&other.val)
     }
 }
 
@@ -183,12 +254,34 @@ impl fmt::Display for Object {
     }
 }
 
+impl Traverse for Object {
+    fn traverse<F>(&self, mut f: &mut F)
+    where
+        F: FnMut(&Value),
+    {
+        match self {
+            Object::Map(hm) => {
+                for (k, v) in hm.iter() {
+                    k.traverse(f);
+                    v.traverse(f);
+                }
+            }
+            Object::List(vec) => {
+                for x in vec.iter() {
+                    x.traverse(f)
+                }
+            }
+            _ => (),
+        }
+    }
+}
+
 impl Object {
     pub fn index(&self, i: Value) -> Result<Value, VMError> {
         let val = match self {
-            Object::List(vec) => vec.get(i.as_int()? as usize),
+            Object::List(vec) => vec.get(i.to_int()? as usize),
             Object::Map(map) => map.get(&i),
-            _ => return Err(VMError::NotIndexable)
+            _ => return Err(VMError::NotIndexable),
         };
 
         Ok(val.map(|x| *x).unwrap_or(Value::Nil))

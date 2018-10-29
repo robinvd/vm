@@ -18,5 +18,8 @@ fn main() {
         'N' = 'N'
     }
 
-    print(table['A'])
+    while True {
+        let x = [1,2,3]
+        print(x)
+    }
 }

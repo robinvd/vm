@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, LinkedList};
 use std::sync::{Arc, Mutex};
 use std::{fmt, io, mem};
 
@@ -38,6 +38,7 @@ pub struct Fiber<'a, 'write> {
     base: &'a VM<'write>,
     f: Vec<FState<'a>>,
     value_stack: Vec<Value>,
+    all_gc: LinkedList<GCObject>,
 }
 
 /// a single function
@@ -47,9 +48,8 @@ pub struct FState<'a> {
     current_block: &'a Block,
     locals: Vec<Value>,
     code_ptr: usize,
+    stack_start: usize,
 }
-
-
 
 impl fmt::Debug for Block {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -64,15 +64,13 @@ impl fmt::Debug for Block {
 
             write!(f, "{:04x}: {:?}", i, op);
             if op.has_arg() {
-                let slice = &self.code.as_slice()[i + 1..i + 1 + 8].as_ptr();
-                let num: i64 = unsafe { *(*slice as *const i64) };
-                i += 8;
+                i += 2;
 
-                if let Some(s) = self.label_index.get(num as usize) {
-                    write!(f, " {}/{}", num, s);
-                } else {
-                    write!(f, " {}", num);
-                }
+                // if let Some(s) = self.label_index.get(num as usize) {
+                //     write!(f, " {}/{}", num, s);
+                // } else {
+                //     write!(f, " {}", num);
+                // }
             }
 
             writeln!(f, "");
@@ -86,11 +84,12 @@ impl fmt::Debug for Block {
 }
 
 impl<'a> FState<'a> {
-    pub fn new(current_block: &'a Block) -> Self {
+    pub fn new(current_block: &'a Block, stack_start: usize) -> Self {
         Self {
             current_block,
             locals: vec![Value::Nil; current_block.local_n],
             code_ptr: 0,
+            stack_start,
         }
     }
 
@@ -127,6 +126,59 @@ impl<'a, 'write> Fiber<'a, 'write> {
             base,
             f: vec![f],
             value_stack: Vec::default(),
+            all_gc: LinkedList::new(),
+        }
+    }
+
+    pub fn deep_clone(&mut self, val: Value) -> Value {
+        let new = val.deep_clone();
+
+        let mut f = |val: &Value| {
+            if let Some(gc) = val.get_object_gcobj() {
+                self.all_gc.push_front(gc);
+            }
+        };
+        new.traverse(&mut f);
+        new
+    }
+
+    pub fn gc_len(&self) -> usize {
+        self.all_gc.len()
+    }
+
+    pub fn collect(&mut self) {
+        let color = true;
+        let mut f = |v: &Value| {
+            if let Some(info) = v.get_object_info() {
+                info.mark.set(color);
+            }
+        };
+        // f(&Value::Nil);
+
+        for v in self.value_stack.iter() {
+            v.traverse(&mut f)
+        }
+
+        for fst in self.f.iter() {
+            for v in fst.locals.iter() {
+                v.traverse(&mut f)
+            }
+        }
+
+        let mut new = LinkedList::new();
+        while let Some(o) = self.all_gc.pop_back() {
+            if o.object_info().mark.get() {
+                new.push_front(o);
+            } else {
+                unsafe {
+                    Box::from_raw(o.val.as_ptr());
+                }
+            }
+        }
+        self.all_gc = new;
+
+        for v in self.value_stack.iter() {
+            v.traverse(&mut f)
         }
     }
 
@@ -145,22 +197,43 @@ impl<'a, 'write> Fiber<'a, 'write> {
     pub fn push_frame(&mut self, f_index: usize) {
         let block_index = self.base.fn_labels[&self.base.fn_label_index[f_index]];
         let new_block = &self.base.blocks[block_index];
-        let f = FState::new(new_block);
+        let f = FState::new(new_block, self.value_stack.len() - new_block.n_args);
 
         self.f.push(f);
     }
 
     pub fn pop_frame(&mut self) {
-        self.f.pop();
+        let old = self.f.pop().unwrap();
+        let ret_val = if old.stack_start < self.value_stack.len() {
+            *self.value_stack.last().unwrap()
+        } else {
+            Value::Nil
+        };
+        self.value_stack.truncate(old.stack_start);
+        self.value_stack.push(ret_val);
     }
 
     pub fn step(&mut self) -> Result<(), VMError> {
-        match self.current_f().advance_opcode() {
+        let instr = self.current_f().advance_opcode();
+        if self.base.debug {
+            println!("{:?} {:?}", instr, self.value_stack);
+        }
+        match instr {
             Opcode::Halt => return Err(VMError::Halt),
             Opcode::Const => {
                 let x = self.current_f().advance_u16() as usize;
                 let c = self.current_f().current_block.constants[x];
-                self.push(c);
+                let new = self.deep_clone(c);
+                self.push(new);
+            }
+            Opcode::Nil => {
+                self.push(Value::Nil);
+            }
+            Opcode::True => {
+                self.push(Value::True);
+            }
+            Opcode::False => {
+                self.push(Value::False);
             }
             Opcode::Copy => {
                 let x = self.current_f().advance_u16() as usize;
@@ -181,7 +254,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
             }
             Opcode::CallForeign => {
                 let f_index = self.current_f().advance_u16();
-                let f = self.base.fn_foreign[f_index as usize](self);
+                self.base.fn_foreign[f_index as usize](self);
             }
             Opcode::Ret => self.pop_frame(),
             Opcode::Pop => {
@@ -195,17 +268,17 @@ impl<'a, 'write> Fiber<'a, 'write> {
             Opcode::Add => {
                 let a = self.pop()?;
                 let b = self.pop()?;
-                self.push(Value::binary_op(a, b, |a, b| Value::Number(a + b))?);
+                self.push(Value::binary_op(a, b, |a, b| Value::number(a + b))?);
             }
             Opcode::Mul => {
                 let a = self.pop()?;
                 let b = self.pop()?;
-                self.push(Value::binary_op(a, b, |a, b| Value::Number(a * b))?);
+                self.push(Value::binary_op(a, b, |a, b| Value::number(a * b))?);
             }
             Opcode::Div => {
                 let a = self.pop()?;
                 let b = self.pop()?;
-                self.push(Value::binary_op(a, b, |a, b| Value::Number(a / b))?);
+                self.push(Value::binary_op(a, b, |a, b| Value::number(a / b))?);
             }
             Opcode::Neg => {
                 let a = self.pop()?;
@@ -277,11 +350,12 @@ pub struct Block {
 
     pub constants: Vec<Value>,
 
+    pub n_args: usize,
     pub local_n: usize,
 }
 
 impl Block {
-    pub fn new(name: impl Into<String>) -> Self {
+    pub fn new(name: impl Into<String>, n_args: usize) -> Self {
         Self {
             name: name.into(),
             code: Vec::default(),
@@ -292,6 +366,7 @@ impl Block {
 
             constants: Default::default(),
 
+            n_args,
             local_n: 0,
         }
     }
@@ -302,7 +377,7 @@ impl Block {
         opcode: Opcode,
         arg: Option<&Arg>,
     ) -> Result<(), VMError> {
-        if opcode.has_arg() && !arg.is_some() {
+        if opcode.has_arg() && arg.is_none() {
             return Err(VMError::Msg("opcode has no arg".to_owned()));
         }
         if !opcode.has_arg() && arg.is_some() {
@@ -315,7 +390,7 @@ impl Block {
         //     }
         // }
 
-        self.code.push(opcode.clone() as u8);
+        self.code.push(opcode as u8);
 
         if let Some(ref a) = arg {
             let num = match a {
@@ -403,13 +478,13 @@ impl Block {
         if let Some(ref x) = instr.label {
             self.add_label(x)?;
         }
-        self.add_opcode(vm, opcode.clone(), instr.arg.as_ref())?;
+        self.add_opcode(vm, opcode, instr.arg.as_ref())?;
 
         Ok(())
     }
 
     pub fn parse_opcode_data(&mut self, data: &str) -> Result<(), VMError> {
-        self.constants.push(Value::Number(data.parse().unwrap()));
+        self.constants.push(Value::number(data.parse().unwrap()));
         Ok(())
     }
 
@@ -505,7 +580,8 @@ impl<'a> VM<'a> {
     }
 
     pub fn new_fiber<'b>(&'b self, label: &str) -> Result<Fiber<'b, 'a>, VMError> {
-        let fs = FState::new(&self.blocks[self.fn_labels[label]]);
+        // todo hangle args
+        let fs = FState::new(&self.blocks[self.fn_labels[label]], 0);
         let fiber = Fiber::new(self, fs);
 
         Ok(fiber)
@@ -519,7 +595,8 @@ impl<'a> VM<'a> {
     }
 
     pub fn parse_ir_block(&mut self, name: impl Into<String>, input: &str) -> Result<(), VMError> {
-        let mut bl = Block::new(name.into());
+        // todo hangle args
+        let mut bl = Block::new(name.into(), 0);
 
         bl.parse_ir(self, input)?;
         self.add_block(bl);
@@ -527,13 +604,14 @@ impl<'a> VM<'a> {
         Ok(())
     }
 
-    pub fn register_foreign(&mut self, name: &str, f: fn(&mut Fiber)) {
+    pub fn register_foreign(&mut self, name: &str, f: fn(&mut Fiber), n_args: usize) {
         let index = self.fn_foreign.len();
         self.fn_foreign.push(f);
         self.fn_foreign_labels.insert(name.to_owned(), index);
 
-        let mut bl = Block::new(name);
-        bl.add_opcode(self, Opcode::CallForeign, Some(&Arg::Int(index as isize))).unwrap();
+        let mut bl = Block::new(name, n_args);
+        bl.add_opcode(self, Opcode::CallForeign, Some(&Arg::Int(index as isize)))
+            .unwrap();
         bl.add_opcode(self, Opcode::Ret, None).unwrap();
         self.add_block(bl);
     }
@@ -548,121 +626,188 @@ impl<'a> VM<'a> {
             println!("sabi vm, version: 0.1");
         }
 
-        self.register_foreign("read_line", vm_read_line);
-        self.register_foreign("print_info", vm_print_info);
+        self.register_foreign("read_line", vm_read_line, 0);
+        self.register_foreign("print_info", vm_print_info, 0);
     }
 
     pub fn register_basic(&mut self) {
-        fn register_basic_instr(vm: &mut VM, name: &str, op: Opcode) {
-            let mut bl = Block::new(name);
+        fn register_basic_instr(vm: &mut VM, name: &str, n_args: usize, op: Opcode) {
+            let mut bl = Block::new(name, n_args);
             bl.add_opcode(vm, op, None).unwrap();
             bl.add_opcode(vm, Opcode::Ret, None).unwrap();
             vm.add_block(bl);
         }
 
-        register_basic_instr(self, "add", Opcode::Add);
-        register_basic_instr(self, "mul", Opcode::Mul);
-        register_basic_instr(self, "div", Opcode::Div);
-        register_basic_instr(self, "neg", Opcode::Neg);
+        register_basic_instr(self, "add", 2, Opcode::Add);
+        register_basic_instr(self, "mul", 2, Opcode::Mul);
+        register_basic_instr(self, "div", 2, Opcode::Div);
+        register_basic_instr(self, "neg", 1, Opcode::Neg);
 
-        register_basic_instr(self, "not", Opcode::Not);
-        register_basic_instr(self, "leq", Opcode::LEQ);
+        register_basic_instr(self, "not", 1, Opcode::Not);
+        register_basic_instr(self, "leq", 2, Opcode::LEQ);
 
-        register_basic_instr(self, "print", Opcode::Print);
+        register_basic_instr(self, "print", 1, Opcode::Print);
+    }
+
+    pub fn register_internal(&mut self) {
+        fn vm_collect(fiber: &mut Fiber) {
+            fiber.collect();
+        }
+        fn vm_count(fiber: &mut Fiber) {
+            fiber.push(Value::number(fiber.gc_len() as f64));
+        }
+
+        self.register_foreign("collect_garbage", vm_collect, 0);
+        self.register_foreign("count_garbage", vm_count, 0);
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-//     fn test_file(vm: &mut VM, file: impl AsRef<std::path::Path>) -> Result<Value, VMError> {
-//         use std::io::Read;
+    const ENTRY: &'static str = r#"
+        .data
+        0
+        .code
+        const 0
+        call main
+        halt
+    "#;
 
-//         let mut input = String::new();
+    pub fn add_main(vm: &mut VM) -> Result<(), VMError> {
+        vm.parse_ir_block("start", ENTRY)?;
+        Ok(())
+    }
 
-//         std::fs::File::open(file)
-//             .unwrap()
-//             .read_to_string(&mut input)
-//             .unwrap();
-//         vm.parse_ir_block("test", &input)?;
-//         let mut f = vm.new_fiber("test")?;
-//         f.run()
-//     }
+    fn load_file(file: impl AsRef<std::path::Path>) -> Result<String, VMError> {
+        use std::io::Read;
 
-//     fn test_instr(instr: &str, vals: &[Value], result: Value) {
-//         let mut vm = VM::default();
-//         let start = vals
-//             .iter()
-//             .map(|x| format!("push {}\n", x))
-//             .collect::<String>();
-//         let p_res = vm.parse_ir_block("test", &format!("{}\n{}\nhalt", start, instr));
-//         assert_eq!(p_res, Ok(()));
-//         println!("{:?}", vm);
-//         let mut f = vm.new_fiber("test").unwrap();
-//         let vm_result = f.run();
-//         assert_eq!(vm_result, Ok(result));
-//     }
+        let mut input = String::new();
 
-//     // #[test]
-//     // fn test_push() {
-//     //     let mut vm = VM::default();
-//     //     vm.parse_ir(
-//     //         r#".code
-//     //         push 1
-//     //         halt"#,
-//     //     ).unwrap();
-//     //     assert_eq!(vm.run(), Ok(1));
-//     // }
+        std::fs::File::open(file)
+            .unwrap()
+            .read_to_string(&mut input)
+            .unwrap();
 
-//     #[test]
-//     fn test_copy() {
-//         test_instr("copy 1", &[Value::Number(10.), Value::Number(15.)], Value::Number(10.));
-//     }
+        Ok(input)
+    }
 
-//     #[test]
-//     fn test_add() {
-//         test_instr("add", &[Value::Number(10.), Value::Number(15.),, 25);
-//     }
-//     #[test]
-//     fn test_mul() {
-//         test_instr("mul", &[Value::Number(10.), Value::Number(15.),, Value::Number(150.),);
-//     }
-//     #[test]
-//     fn test_div() {
-//         test_instr("div", &[Value::Number(10.), 2], 5);
-//     }
-//     #[test]
-//     fn test_not() {
-//         test_instr("not", &[1], 0);
-//     }
-//     #[test]
-//     fn test_neg() {
-//         test_instr("neg", &[10], Value::Number(-10.),;
-//     }
-//     #[test]
-//     fn test_leq() {
-//         test_instr("leq", &[Value::Number(10.), Value::Number(10.)], Value::Number(0.));
-//         test_instr("leq", &[Value::Number(9.), Value::Number(10.)], Value::Number(1));
-//         test_instr("leq", &[Value::Number(10.), Value::Number(9.)], Value::Number(0.));
-//     }
-//     #[test]
-//     fn test_pop() {
-//         test_instr("pop", &[Value::Number(10.), Value::Number(15.),, Value::Number(10.));
-//     }
-//     #[test]
-//     // #[test]
-//     // fn load_store_test() {
-//     //     assert_eq!(test_file(&mut VM::default(), "tests/label.vmb"), Ok(2));
-//     // }
-//     #[test]
-//     fn label_if_test() {
-//         assert_eq!(test_file(&mut VM::default(), "tests/bc/label.vmb"), Ok(Value::Number(2.)));
-//     }
+    fn load_vm<'a>(input: &'a str, buffer: &'a mut Vec<u8>) -> VM<'a> {
+        use crate::compiler;
+        use crate::parser;
 
-//     #[test]
-//     fn sqrt_test() {
-//         assert_eq!(test_file(&mut VM::default(), "tests/bc/sqrt.vmb"), Ok(Value::Number(1024.)));
-//     }
+        let mut vm = VM::new(Box::new(buffer));
+        vm.register_basic();
 
-// }
+        let parsed = parser::code::parse_file()
+            .easy_parse(input)
+            .expect("failed to parse");
+
+        add_main(&mut vm).expect("failed to add main");
+        compiler::compile(&mut vm, &parsed.0).expect("failed to compile");
+
+        vm
+    }
+
+    #[test]
+    fn test_gc() {
+        let mut buffer = Vec::new();
+        let input = load_file("tests/sabi/gc.sabi").unwrap();
+        let mut vm = load_vm(&input, &mut buffer);
+        vm.register_internal();
+
+        let mut f = vm.new_fiber("start").unwrap();
+        let res = f.run();
+        assert_eq!(res, Ok(Value::True));
+    }
+    //     fn test_file(vm: &mut VM, file: impl AsRef<std::path::Path>) -> Result<Value, VMError> {
+    //         use std::io::Read;
+
+    //         let mut input = String::new();
+
+    //         std::fs::File::open(file)
+    //             .unwrap()
+    //             .read_to_string(&mut input)
+    //             .unwrap();
+    //         vm.parse_ir_block("test", &input)?;
+    //         let mut f = vm.new_fiber("test")?;
+    //         f.run()
+    //     }
+
+    //     fn test_instr(instr: &str, vals: &[Value], result: Value) {
+    //         let mut vm = VM::default();
+    //         let start = vals
+    //             .iter()
+    //             .map(|x| format!("push {}\n", x))
+    //             .collect::<String>();
+    //         let p_res = vm.parse_ir_block("test", &format!("{}\n{}\nhalt", start, instr));
+    //         assert_eq!(p_res, Ok(()));
+    //         println!("{:?}", vm);
+    //         let mut f = vm.new_fiber("test").unwrap();
+    //         let vm_result = f.run();
+    //         assert_eq!(vm_result, Ok(result));
+    //     }
+
+    //     // #[test]
+    //     // fn test_push() {
+    //     //     let mut vm = VM::default();
+    //     //     vm.parse_ir(
+    //     //         r#".code
+    //     //         push 1
+    //     //         halt"#,
+    //     //     ).unwrap();
+    //     //     assert_eq!(vm.run(), Ok(1));
+    //     // }
+
+    //     #[test]
+    //     fn test_copy() {
+    //         test_instr("copy 1", &[Value::Number(10.), Value::Number(15.)], Value::Number(10.));
+    //     }
+
+    //     #[test]
+    //     fn test_add() {
+    //         test_instr("add", &[Value::Number(10.), Value::Number(15.),, 25);
+    //     }
+    //     #[test]
+    //     fn test_mul() {
+    //         test_instr("mul", &[Value::Number(10.), Value::Number(15.),, Value::Number(150.),);
+    //     }
+    //     #[test]
+    //     fn test_div() {
+    //         test_instr("div", &[Value::Number(10.), 2], 5);
+    //     }
+    //     #[test]
+    //     fn test_not() {
+    //         test_instr("not", &[1], 0);
+    //     }
+    //     #[test]
+    //     fn test_neg() {
+    //         test_instr("neg", &[10], Value::Number(-10.),;
+    //     }
+    //     #[test]
+    //     fn test_leq() {
+    //         test_instr("leq", &[Value::Number(10.), Value::Number(10.)], Value::Number(0.));
+    //         test_instr("leq", &[Value::Number(9.), Value::Number(10.)], Value::Number(1));
+    //         test_instr("leq", &[Value::Number(10.), Value::Number(9.)], Value::Number(0.));
+    //     }
+    //     #[test]
+    //     fn test_pop() {
+    //         test_instr("pop", &[Value::Number(10.), Value::Number(15.),, Value::Number(10.));
+    //     }
+    //     #[test]
+    //     // #[test]
+    //     // fn load_store_test() {
+    //     //     assert_eq!(test_file(&mut VM::default(), "tests/label.vmb"), Ok(2));
+    //     // }
+    //     #[test]
+    //     fn label_if_test() {
+    //         assert_eq!(test_file(&mut VM::default(), "tests/bc/label.vmb"), Ok(Value::Number(2.)));
+    //     }
+
+    //     #[test]
+    //     fn sqrt_test() {
+    //         assert_eq!(test_file(&mut VM::default(), "tests/bc/sqrt.vmb"), Ok(Value::Number(1024.)));
+    //     }
+
+}

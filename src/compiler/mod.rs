@@ -11,10 +11,10 @@ struct Context<'a> {
 }
 
 impl<'a> Context<'a> {
-    pub fn new(name: impl Into<String>) -> Self {
+    pub fn new(name: impl Into<String>, n_args: usize) -> Self {
         Self {
             names: HashMap::default(),
-            block: Block::new(name),
+            block: Block::new(name, n_args),
         }
     }
 
@@ -100,14 +100,14 @@ impl<'a> Context<'a> {
                 let loc = self
                     .names
                     .get(name)
-                    .ok_or(VMError::Msg("local not found".to_owned()))?;
+                    .ok_or(VMError::Msg("local var not found".to_owned()))?;
                 self.add_opcode(vm, Opcode::Load, Some(&Arg::Int(*loc as isize)))?;
             }
             Expr::Assign(name, e) => {
                 let loc = *self
                     .names
                     .get(name)
-                    .ok_or(VMError::Msg("local not found".to_owned()))?;
+                    .ok_or(VMError::Msg("local assign not found".to_owned()))?;
                 self.compile_expr(vm, e)?;
                 self.add_opcode(vm, Opcode::Store, Some(&Arg::Int(loc as isize)))?;
             }
@@ -134,7 +134,7 @@ impl<'a> Context<'a> {
 }
 
 pub fn compile_f(vm: &mut VM, f: &Function) -> Result<(), VMError> {
-    let mut context = Context::new(f.name);
+    let mut context = Context::new(f.name, f.args.len());
 
     for ref a in f.args.iter() {
         let i = context.insert_name(&a);
@@ -146,6 +146,7 @@ pub fn compile_f(vm: &mut VM, f: &Function) -> Result<(), VMError> {
     for ref a in &f.body {
         context.compile_expr(vm, &a)?;
     }
+    context.block.add_opcode(vm, Opcode::Nil, None)?;
     context.block.add_opcode(vm, Opcode::Ret, None)?;
 
     vm.add_block(context.block);
@@ -153,7 +154,7 @@ pub fn compile_f(vm: &mut VM, f: &Function) -> Result<(), VMError> {
     Ok(())
 }
 pub fn compile_bc_f(vm: &mut VM, f: &BcFunction) -> Result<(), VMError> {
-    let mut bl = Block::new(f.name.to_owned());
+    let mut bl = Block::new(f.name.to_owned(), f.args.len());
 
     for ref a in &f.body {
         bl.parse_instr(vm, a)?;

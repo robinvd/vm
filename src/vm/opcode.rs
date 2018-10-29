@@ -1,11 +1,10 @@
 use std::mem;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u8)]
 pub enum Opcode {
     // general
     Halt,
-    Const,
     Pop,
     Copy,
     Load,
@@ -16,6 +15,12 @@ pub enum Opcode {
     Call,
     CallForeign,
     Ret,
+
+    // vals
+    Const,
+    Nil,
+    True,
+    False,
 
     // math
     Add,
@@ -68,7 +73,8 @@ impl Opcode {
         use self::Opcode::*;
         let x = match *self {
             // general
-            Halt | Pop | Print | Add | Mul | Div | Neg | LEQ | JmpT | Store | Index => -1,
+            Halt | Pop | Print | Add | Mul | Div | Neg | LEQ | JmpT | Store | Index | True
+            | False | Nil => -1,
             Const | Copy | New | Load => 1,
             Not | Jmp | Nop => 0,
             Call | CallForeign | Ret => return None,

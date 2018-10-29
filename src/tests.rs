@@ -12,17 +12,17 @@ const ENTRY: &'static str = r#"
     .data
     0
     .code
-    const 0
     call main
+    const 0
     halt
 "#;
 
-fn add_main(vm: &mut VM) -> Result<(), VMError> {
+pub fn add_main(vm: &mut VM) -> Result<(), VMError> {
     vm.parse_ir_block("start", ENTRY)?;
     Ok(())
 }
 
-fn test_file(file: impl AsRef<std::path::Path>) -> (Vec<u8>, Result<Value, VMError>) {
+pub fn test_file(file: impl AsRef<std::path::Path>) -> (Vec<u8>, Result<Value, VMError>) {
     let mut buffer = Vec::new();
     let res = {
         let mut vm = VM::new(Box::new(&mut buffer));
@@ -50,41 +50,41 @@ fn test_file(file: impl AsRef<std::path::Path>) -> (Vec<u8>, Result<Value, VMErr
 #[test]
 fn test_while() {
     let (out, res) = test_file("tests/sabi/while.sabi");
-    assert_eq!(res, Ok(Value::Number(0.)));
+    assert_eq!(res, Ok(Value::number(0.)));
     assert_eq!(out, b"1\n2\n3\n");
 }
 
 #[test]
 fn test_if() {
     let (out, res) = test_file("tests/sabi/if.sabi");
-    assert_eq!(res, Ok(Value::Number(0.)));
+    assert_eq!(res, Ok(Value::number(0.)));
     assert_eq!(out, b"3\n");
 }
 
 #[test]
 fn test_sqrt() {
     let (out, res) = test_file("tests/sabi/sqrt.sabi");
-    assert_eq!(res, Ok(Value::Number(0.)));
+    assert_eq!(res, Ok(Value::number(0.)));
     assert_eq!(out, b"1024\n");
 }
 
 #[test]
 fn test_function() {
     let (out, res) = test_file("tests/sabi/function.sabi");
-    assert_eq!(res, Ok(Value::Number(0.)));
+    assert_eq!(res, Ok(Value::number(0.)));
     assert_eq!(out, b"1\n");
 }
 
 #[test]
 fn test_literals() {
     let (out, res) = test_file("tests/sabi/literals.sabi");
-    assert_eq!(res, Ok(Value::Number(0.)));
+    assert_eq!(res, Ok(Value::number(0.)));
     assert_eq!(out, b"[1, 2]\n{1 = 2}\n");
 }
 
 #[test]
 fn test_index() {
     let (out, res) = test_file("tests/sabi/index.sabi");
-    assert_eq!(res, Ok(Value::Number(0.)));
+    assert_eq!(res, Ok(Value::number(0.)));
     assert_eq!(out, b"1\n3\n2\n4\n");
 }

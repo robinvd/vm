@@ -1,0 +1,22 @@
+fn gen() {
+    let i = 10
+    let val = Nil
+    while leq(0,i) {
+        val = [1]
+        i = add(neg(1), i)
+    }
+    return [2]
+}
+
+fn main() {
+    let val = gen()
+    let local = [5]
+
+    let start = count_garbage()
+    collect_garbage()
+    let end = count_garbage()
+
+    gen()
+    print(val)
+    return not(leq(start, end))
+}
