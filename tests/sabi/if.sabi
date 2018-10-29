@@ -1,13 +1,3 @@
-bc add(a,b) {
-    add
-    ret
-}
-
-bc print(a) {
-    print
-    ret
-}
-
 fn main() {
     let res = 0
     let x = 0

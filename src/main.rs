@@ -53,6 +53,8 @@ fn main() {
         .get_matches();
 
     let mut vm = vm::VM::default();
+    vm.register_basic();
+    vm.register_io();
     if matches.is_present("debug") {
         vm.debug = true;
     }

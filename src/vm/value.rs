@@ -110,6 +110,29 @@ impl Value {
             Value::True
         }
     }
+
+    pub fn as_number(self) -> Result<f64, VMError> {
+        match self {
+            Value::Number(n) => Ok(n),
+            _ => Err(VMError::InvalidConversion),
+
+        }
+    }
+
+    pub fn as_int(self) -> Result<isize, VMError> {
+        self.as_number().map(|x| x.round() as isize)
+    }
+
+    pub fn index(&self, i: Value) -> Result<Value, VMError> {
+        match self {
+            Value::Object(o) => o.index(i),
+            _ => Err(VMError::NotIndexable),
+        }
+    }
+
+    pub fn object(o: Object) -> Value {
+        Value::Object(GCObject::new(o))
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -157,5 +180,17 @@ impl fmt::Display for Object {
             Object::Fiber(_) => write!(f, "<fiber>"),
             Object::Foreign(_) => write!(f, "<foreign>"),
         }
+    }
+}
+
+impl Object {
+    pub fn index(&self, i: Value) -> Result<Value, VMError> {
+        let val = match self {
+            Object::List(vec) => vec.get(i.as_int()? as usize),
+            Object::Map(map) => map.get(&i),
+            _ => return Err(VMError::NotIndexable)
+        };
+
+        Ok(val.map(|x| *x).unwrap_or(Value::Nil))
     }
 }

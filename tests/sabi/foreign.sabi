@@ -1,0 +1,4 @@
+fn main() {
+    print_info()
+    print(read_line())
+}

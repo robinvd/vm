@@ -14,6 +14,7 @@ pub enum Opcode {
 
     // fn
     Call,
+    CallForeign,
     Ret,
 
     // math
@@ -29,6 +30,10 @@ pub enum Opcode {
     // jmp
     JmpT,
     Jmp,
+
+    // objects
+    New,
+    Index,
 
     // async:
     // asyncjmp
@@ -53,6 +58,7 @@ impl Opcode {
             | Opcode::Load
             | Opcode::Store
             | Opcode::Call
+            | Opcode::CallForeign
             | Opcode::Copy => true,
             _ => false,
         }
@@ -62,10 +68,10 @@ impl Opcode {
         use self::Opcode::*;
         let x = match *self {
             // general
-            Halt | Pop | Print | Add | Mul | Div | Neg | LEQ | JmpT => -1,
-            Const | Copy => 1,
+            Halt | Pop | Print | Add | Mul | Div | Neg | LEQ | JmpT | Store | Index => -1,
+            Const | Copy | New | Load => 1,
             Not | Jmp | Nop => 0,
-            Load | Store | Call | Ret => return None,
+            Call | CallForeign | Ret => return None,
         };
         Some(x)
     }

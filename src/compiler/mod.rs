@@ -122,6 +122,11 @@ impl<'a> Context<'a> {
                     self.compile_expr(vm, v)?;
                 }
             }
+            Expr::Index(val, index) => {
+                self.compile_expr(vm, val)?;
+                self.compile_expr(vm, index)?;
+                self.add_opcode(vm, Opcode::Index, None)?;
+            }
         }
 
         Ok(())

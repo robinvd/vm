@@ -4,7 +4,7 @@ use combine::char::{letter, string};
 use combine::range::{recognize, take_while, take_while1};
 use combine::{
     attempt, between, choice, eof, many, many1, one_of, optional, sep_by, sep_by1, ParseError,
-    Parser, RangeStream,
+    Parser, RangeStream, any
 };
 
 use crate::parser::*;
@@ -44,6 +44,7 @@ pub enum Expr<'a> {
     Let(Vec<&'a str>, Vec<Expr<'a>>),
     Assign(&'a str, Box<Expr<'a>>),
     Return(Vec<Expr<'a>>),
+    Index(Box<Expr<'a>>, Box<Expr<'a>>),
 }
 
 pub fn skip_whitespace<'a, I>() -> impl Parser<Input = I, Output = &'a str>
@@ -59,7 +60,7 @@ where
     I: RangeStream<Item = char, Range = &'a str>,
     I::Error: ParseError<I::Item, I::Range, I::Position>,
 {
-    let parser = (letter(), take_while(|c: char| c.is_alphanumeric()));
+    let parser = (letter(), take_while(|c: char| c.is_alphanumeric() || c == '_'));
     recognize(parser).skip(skip_whitespace())
 }
 
@@ -153,6 +154,14 @@ parser!{
                 }
                 Value::Object(GCObject::new(Object::Map(hm)))
             }),
+            between(
+                text("\""), text("\""),
+                take_while(|c| c != '"'),
+            ).map(|s: &str| Value::Object(GCObject::new(Object::String(s.to_owned())))),
+            between(
+                text("'"), text("'"),
+                any(),
+            ).map(|c: char| Value::Number(c as i64 as f64)),
         ))
     }
 }
@@ -178,6 +187,8 @@ where
         )
     };
     let assignment = || attempt((ident(), text("="), expr()));
+
+    let index = || (ident(), between(text("["), text("]"), expr()));
 
     let ret = || (text("return"), sep_by(expr(), text(",")));
 
@@ -206,6 +217,7 @@ where
         if_().map(|(_, pred, t_body, f_body)| Expr::If(Box::new(pred), t_body, f_body)),
         // float().map(|x| Expr::Lit(Value::Number(x))),
         literal().map(Expr::Lit),
+        attempt(index().map(|(v,i)| Expr::Index(Box::new(Expr::Var(v)),Box::new(i)))),
         attempt(call()).map(|(n, a)| Expr::Call(n, a)),
         ident().map(Expr::Var),
         // arg_list(expr).map(Expr::Tuple),
@@ -291,6 +303,23 @@ mod tests {
 
         let result = expr().easy_parse("xvar");
         assert_eq!(result, Ok((Expr::Var("xvar"), "")));
+
+        let result = expr().easy_parse("var[var[var[1]]]");
+        assert_eq!(result, 
+            Ok((
+                Expr::Index(
+                    Box::new(Expr::Var("var")),
+                    Box::new(Expr::Index(
+                        Box::new(Expr::Var("var")),
+                        Box::new(Expr::Index(
+                            Box::new(Expr::Var("var")),
+                            Box::new(Expr::Lit(Value::Number(1.0)))
+                        ))
+                    ))
+                ),
+                ""
+            ))
+        );
     }
 
     #[test]

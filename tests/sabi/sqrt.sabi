@@ -1,33 +1,7 @@
-use std::math::power;
-
-bc add(a,b) {
-    add
-    ret
-}
-
-bc leq(a,b) {
-    leq
-    ret
-}
-
-bc print(a) {
-    print
-    ret
-}
-
-bc mul(a,b) {
-    mul
-    ret
-}
-
-bc not(a) {
-    ret
-}
-
 fn main() {
     let res = 1048576
     let i = 1
-    while not(leq(mul(i,i), res)) {
+    while leq(mul(i,i), res) {
         i = add(i,1)
     }
     print(i)

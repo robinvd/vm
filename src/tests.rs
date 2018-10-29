@@ -26,6 +26,7 @@ fn test_file(file: impl AsRef<std::path::Path>) -> (Vec<u8>, Result<Value, VMErr
     let mut buffer = Vec::new();
     let res = {
         let mut vm = VM::new(Box::new(&mut buffer));
+        vm.register_basic();
         let mut input = String::new();
 
         std::fs::File::open(file)
@@ -79,4 +80,11 @@ fn test_literals() {
     let (out, res) = test_file("tests/sabi/literals.sabi");
     assert_eq!(res, Ok(Value::Number(0.)));
     assert_eq!(out, b"[1, 2]\n{1 = 2}\n");
+}
+
+#[test]
+fn test_index() {
+    let (out, res) = test_file("tests/sabi/index.sabi");
+    assert_eq!(res, Ok(Value::Number(0.)));
+    assert_eq!(out, b"1\n3\n2\n4\n");
 }

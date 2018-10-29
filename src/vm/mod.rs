@@ -23,6 +23,8 @@ pub enum VMError {
     CombineErr(String),
     Msg(String),
     DifferentNArgs,
+    NotIndexable,
+    InvalidConversion,
 }
 
 // static (read only) and state part
@@ -47,18 +49,7 @@ pub struct FState<'a> {
     code_ptr: usize,
 }
 
-// static
-pub struct VM<'write> {
-    blocks: Vec<Block>,
-    fn_labels: HashMap<String, usize>,
-    fn_label_index: Vec<String>,
 
-    data: Vec<&'static str>,
-
-    output: Arc<Mutex<Box<io::Write + 'write>>>,
-
-    pub debug: bool,
-}
 
 impl fmt::Debug for Block {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -188,6 +179,10 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 let x = self.current_f().advance_u16();
                 self.push_frame(x as usize)
             }
+            Opcode::CallForeign => {
+                let f_index = self.current_f().advance_u16();
+                let f = self.base.fn_foreign[f_index as usize](self);
+            }
             Opcode::Ret => self.pop_frame(),
             Opcode::Pop => {
                 self.pop()?;
@@ -241,6 +236,13 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 if cond.is_true() {
                     self.current_f().jump_to_label_index(label_index as usize)?;
                 }
+            }
+            Opcode::New => {}
+            Opcode::Index => {
+                let index = self.pop()?;
+                let val = self.pop()?;
+                let result = val.index(index)?;
+                self.push(result)
             }
             Opcode::Nop => {}
         };
@@ -469,6 +471,21 @@ impl<'a> fmt::Debug for VM<'a> {
     }
 }
 
+pub struct VM<'write> {
+    blocks: Vec<Block>,
+    fn_labels: HashMap<String, usize>,
+    fn_label_index: Vec<String>,
+
+    fn_foreign: Vec<fn(&mut Fiber)>,
+    fn_foreign_labels: HashMap<String, usize>,
+
+    data: Vec<&'static str>,
+
+    output: Arc<Mutex<Box<io::Write + 'write>>>,
+
+    pub debug: bool,
+}
+
 impl<'a> VM<'a> {
     pub fn new(output: Box<io::Write + 'a + Sync>) -> Self {
         Self {
@@ -476,6 +493,8 @@ impl<'a> VM<'a> {
 
             fn_labels: Default::default(),
             fn_label_index: Default::default(),
+            fn_foreign: Default::default(),
+            fn_foreign_labels: Default::default(),
 
             data: Default::default(),
 
@@ -506,6 +525,50 @@ impl<'a> VM<'a> {
         self.add_block(bl);
 
         Ok(())
+    }
+
+    pub fn register_foreign(&mut self, name: &str, f: fn(&mut Fiber)) {
+        let index = self.fn_foreign.len();
+        self.fn_foreign.push(f);
+        self.fn_foreign_labels.insert(name.to_owned(), index);
+
+        let mut bl = Block::new(name);
+        bl.add_opcode(self, Opcode::CallForeign, Some(&Arg::Int(index as isize))).unwrap();
+        bl.add_opcode(self, Opcode::Ret, None).unwrap();
+        self.add_block(bl);
+    }
+
+    pub fn register_io(&mut self) {
+        fn vm_read_line(fiber: &mut Fiber) {
+            let mut buffer = String::new();
+            std::io::stdin().read_line(&mut buffer).unwrap();
+            fiber.push(Value::object(Object::String(buffer)));
+        }
+        fn vm_print_info(_fiber: &mut Fiber) {
+            println!("sabi vm, version: 0.1");
+        }
+
+        self.register_foreign("read_line", vm_read_line);
+        self.register_foreign("print_info", vm_print_info);
+    }
+
+    pub fn register_basic(&mut self) {
+        fn register_basic_instr(vm: &mut VM, name: &str, op: Opcode) {
+            let mut bl = Block::new(name);
+            bl.add_opcode(vm, op, None).unwrap();
+            bl.add_opcode(vm, Opcode::Ret, None).unwrap();
+            vm.add_block(bl);
+        }
+
+        register_basic_instr(self, "add", Opcode::Add);
+        register_basic_instr(self, "mul", Opcode::Mul);
+        register_basic_instr(self, "div", Opcode::Div);
+        register_basic_instr(self, "neg", Opcode::Neg);
+
+        register_basic_instr(self, "not", Opcode::Not);
+        register_basic_instr(self, "leq", Opcode::LEQ);
+
+        register_basic_instr(self, "print", Opcode::Print);
     }
 }
 
