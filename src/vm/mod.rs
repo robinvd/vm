@@ -120,6 +120,16 @@ impl<'a> FState<'a> {
     }
 }
 
+impl<'a, 'write> Drop for Fiber<'a, 'write> {
+    fn drop(&mut self) {
+        for o in self.all_gc.iter() {
+            unsafe {
+                Box::from_raw(o.val.as_ptr());
+            }
+        }
+    }
+}
+
 impl<'a, 'write> Fiber<'a, 'write> {
     pub fn new(base: &'a VM<'write>, f: FState<'a>) -> Self {
         Self {
@@ -153,7 +163,6 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 info.mark.set(color);
             }
         };
-        // f(&Value::Nil);
 
         for v in self.value_stack.iter() {
             v.traverse(&mut f)
@@ -187,6 +196,9 @@ impl<'a, 'write> Fiber<'a, 'write> {
     }
 
     pub fn pop(&mut self) -> Result<Value, VMError> {
+        if self.value_stack.len() <= self.current_f().stack_start {
+            return Err(VMError::EmptyPop)
+        }
         self.value_stack.pop().ok_or(VMError::EmptyPop)
     }
 
@@ -195,7 +207,12 @@ impl<'a, 'write> Fiber<'a, 'write> {
     }
 
     pub fn push_frame(&mut self, f_index: usize) {
-        let block_index = self.base.fn_labels[&self.base.fn_label_index[f_index]];
+        let block_name = &self.base.fn_label_index[f_index];
+        let block_index = *self
+            .base
+            .fn_labels
+            .get(block_name)
+            .expect(&format!("function {} not found", block_name));
         let new_block = &self.base.blocks[block_index];
         let f = FState::new(new_block, self.value_stack.len() - new_block.n_args);
 
@@ -837,79 +854,25 @@ mod tests {
         );
     }
 
-    //     fn test_instr(instr: &str, vals: &[Value], result: Value) {
-    //         let mut vm = VM::default();
-    //         let start = vals
-    //             .iter()
-    //             .map(|x| format!("push {}\n", x))
-    //             .collect::<String>();
-    //         let p_res = vm.parse_ir_block("test", &format!("{}\n{}\nhalt", start, instr));
-    //         assert_eq!(p_res, Ok(()));
-    //         println!("{:?}", vm);
-    //         let mut f = vm.new_fiber("test").unwrap();
-    //         let vm_result = f.run();
-    //         assert_eq!(vm_result, Ok(result));
-    //     }
+    #[test]
+    fn test_empty_push() {
+        let buffer = Vec::new();
+        let mut vm = VM::new(Box::new(buffer));
 
-    //     // #[test]
-    //     // fn test_push() {
-    //     //     let mut vm = VM::default();
-    //     //     vm.parse_ir(
-    //     //         r#".code
-    //     //         push 1
-    //     //         halt"#,
-    //     //     ).unwrap();
-    //     //     assert_eq!(vm.run(), Ok(1));
-    //     // }
+        let mut main = Block::new("main", 0);
+        main.add_opcode(&mut vm, Num, Some(&Arg::Int(21))).unwrap();
+        main.add_opcode(&mut vm, Call, Some(&Arg::Text("wrong"))).unwrap();
+        main.add_opcode(&mut vm, Ret, None).unwrap();
 
-    //     #[test]
-    //     fn test_copy() {
-    //         test_instr("copy 1", &[Value::Number(10.), Value::Number(15.)], Value::Number(10.));
-    //     }
+        let mut wrong = Block::new("wrong", 0);
+        wrong.add_opcode(&mut vm, Pop, None).unwrap();
+        wrong.add_opcode(&mut vm, Ret, None).unwrap();
 
-    //     #[test]
-    //     fn test_add() {
-    //         test_instr("add", &[Value::Number(10.), Value::Number(15.),, 25);
-    //     }
-    //     #[test]
-    //     fn test_mul() {
-    //         test_instr("mul", &[Value::Number(10.), Value::Number(15.),, Value::Number(150.),);
-    //     }
-    //     #[test]
-    //     fn test_div() {
-    //         test_instr("div", &[Value::Number(10.), 2], 5);
-    //     }
-    //     #[test]
-    //     fn test_not() {
-    //         test_instr("not", &[1], 0);
-    //     }
-    //     #[test]
-    //     fn test_neg() {
-    //         test_instr("neg", &[10], Value::Number(-10.),;
-    //     }
-    //     #[test]
-    //     fn test_leq() {
-    //         test_instr("leq", &[Value::Number(10.), Value::Number(10.)], Value::Number(0.));
-    //         test_instr("leq", &[Value::Number(9.), Value::Number(10.)], Value::Number(1));
-    //         test_instr("leq", &[Value::Number(10.), Value::Number(9.)], Value::Number(0.));
-    //     }
-    //     #[test]
-    //     fn test_pop() {
-    //         test_instr("pop", &[Value::Number(10.), Value::Number(15.),, Value::Number(10.));
-    //     }
-    //     #[test]
-    //     // #[test]
-    //     // fn load_store_test() {
-    //     //     assert_eq!(test_file(&mut VM::default(), "tests/label.vmb"), Ok(2));
-    //     // }
-    //     #[test]
-    //     fn label_if_test() {
-    //         assert_eq!(test_file(&mut VM::default(), "tests/bc/label.vmb"), Ok(Value::Number(2.)));
-    //     }
+        vm.add_block(main);
+        vm.add_block(wrong);
 
-    //     #[test]
-    //     fn sqrt_test() {
-    //         assert_eq!(test_file(&mut VM::default(), "tests/bc/sqrt.vmb"), Ok(Value::Number(1024.)));
-    //     }
+        let res = vm.new_fiber("main").unwrap().run();
 
+        assert_eq!(res, Err(VMError::EmptyPop))
+    }
 }
