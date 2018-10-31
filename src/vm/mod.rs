@@ -696,7 +696,7 @@ impl<'a> VM<'a> {
         fn vm_floor(fiber: &mut Fiber) {
             let val = fiber.pop().unwrap();
             fiber.push(val.unary_op(|x| x.floor()).unwrap());
-    }
+        }
         self.register_foreign("floor", vm_floor, 1);
 
         fn vm_ceil(fiber: &mut Fiber) {

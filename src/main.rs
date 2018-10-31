@@ -1,20 +1,17 @@
-#![recursion_limit = "1000"]
+#![recursion_limit = "1000"] 
+#![feature(nll)]
 
-extern crate regex;
 #[macro_use]
 extern crate combine;
 
-mod compiler;
-mod parser;
-mod vm;
-
-#[cfg(test)]
-mod tests;
-
 use std::fs;
-use std::io::{self, Read};
+use std::io::{Read};
 
 use clap::{App, Arg};
+
+use sabi::vm;
+use sabi::compiler;
+use sabi::parser;
 
 fn main() {
     let matches = App::new("SABI VM")
