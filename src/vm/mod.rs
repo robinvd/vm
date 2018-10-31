@@ -64,20 +64,22 @@ impl fmt::Debug for Block {
 
             write!(f, "{:04x}: {:?}", i, op);
             if op.has_arg() {
+                let num = (self.code[i + 1] as u16) << 4 | self.code[i + 2] as u16;
                 i += 2;
 
                 // if let Some(s) = self.label_index.get(num as usize) {
                 //     write!(f, " {}/{}", num, s);
                 // } else {
-                //     write!(f, " {}", num);
+                write!(f, " {}", num);
                 // }
             }
 
             writeln!(f, "");
             i += 1;
         }
-        writeln!(f, "{:?}", self.labels);
-        writeln!(f, "{:?}", self.label_index);
+        writeln!(f, "labels {:?}", self.labels);
+        writeln!(f, "labeli {:?}", self.label_index);
+        writeln!(f, "const  {:?}", self.constants);
 
         Ok(())
     }
@@ -360,13 +362,12 @@ impl<'a, 'write> Fiber<'a, 'write> {
 
     pub fn run(&mut self) -> Result<Value, VMError> {
         loop {
-            // if self.base.debug {
-            //     if self.current_f().current_block.code.get(self.current_f().code_ptr).and_then(|x| Opcode::from_u8(x.clone())) != Some(Opcode::Nop) {
-            //         println!("{:?}", self.);
-            //         let mut input = String::new();
-            //         io::stdin().read_line(&mut input);
-            //     }
-            // }
+            if self.base.debug {
+                println!("stack: {:?}", self.value_stack);
+                println!("locals: {:?}", self.current_f().locals);
+                let mut input = String::new();
+                io::stdin().read_line(&mut input);
+            }
             match self.step() {
                 Ok(_) => continue,
                 Err(VMError::Halt) => return Ok(self.pop()?),
@@ -455,6 +456,12 @@ impl Block {
         Ok(())
     }
 
+    pub fn add_data(&mut self, data: Value) -> usize {
+        let i = self.constants.len();
+        self.constants.push(data);
+        i
+    }
+
     /// Add a label to the current location
     /// a jump to this label jumps to the instruction
     /// after the label
@@ -520,7 +527,7 @@ impl Block {
     }
 
     pub fn parse_opcode_data(&mut self, data: &str) -> Result<(), VMError> {
-        self.constants.push(Value::number(data.parse().unwrap()));
+        self.add_data(Value::number(data.parse().unwrap()));
         Ok(())
     }
 
