@@ -1,0 +1,19 @@
+fn sqrt(n) {
+    let x = pow(2, 31)
+    let y = 0
+    while True {
+        y = floor(div(
+            add(x, floor(div(n,x))),
+            2
+        ))
+        if geq(y,x) {
+            return x
+        }
+        x = y
+    }
+}
+
+fn main() {
+    let res = 1048576
+    print(sqrt(res))
+}

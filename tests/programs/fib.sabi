@@ -1,0 +1,14 @@
+fn fib(x) {
+    if leq(x,2) {
+        return x
+    } else {
+        return add(
+            fib(add(x,neg(1))),
+            fib(add(x,neg(2)))
+        )
+    }
+}
+
+fn main() {
+    print(fib(20))
+}

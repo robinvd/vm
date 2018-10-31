@@ -151,6 +151,18 @@ impl Value {
         }
     }
 
+    pub fn true_val() -> Value {
+        Value::True
+    }
+
+    pub fn false_val() -> Value {
+        Value::False
+    }
+
+    pub fn nil() -> Value {
+        Value::Nil
+    }
+
     pub fn number(f: f64) -> Value {
         Value::Number(OrderedFloat(f))
     }

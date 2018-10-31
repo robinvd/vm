@@ -1,8 +1,0 @@
-fn main() {
-    let res = 1048576
-    let i = 1
-    while leq(mul(i,i), res) {
-        i = add(i,1)
-    }
-    print(i)
-}

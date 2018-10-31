@@ -11,5 +11,13 @@ fn main() {
         res = add(res, 5)
     }
 
+    if Nil {
+        res = add(res, 7)
+    }
+
+    if False {
+        res = add(res, 11)
+    }
+
     print(res)
 }

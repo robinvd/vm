@@ -229,6 +229,10 @@ impl<'a, 'write> Fiber<'a, 'write> {
             Opcode::Nil => {
                 self.push(Value::Nil);
             }
+            Opcode::Num => {
+                let x = self.current_f().advance_u16() as f64;
+                self.push(Value::number(x));
+            }
             Opcode::True => {
                 self.push(Value::True);
             }
@@ -276,8 +280,8 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 self.push(Value::binary_op(a, b, |a, b| Value::number(a * b))?);
             }
             Opcode::Div => {
-                let a = self.pop()?;
                 let b = self.pop()?;
+                let a = self.pop()?;
                 self.push(Value::binary_op(a, b, |a, b| Value::number(a / b))?);
             }
             Opcode::Neg => {
@@ -289,13 +293,28 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 self.push(a.not());
             }
             Opcode::LEQ => {
-                let a = self.pop()?;
+                // leq(a,b) then the code will be (push not actual opcode)
+                // push a, push b, leq
+                // thus b will be popped first
                 let b = self.pop()?;
+                let a = self.pop()?;
                 self.push(Value::binary_op(a, b, |a, b| {
                     if a <= b {
-                        Value::False
-                    } else {
                         Value::True
+                    } else {
+                        Value::False
+                    }
+                })?);
+            }
+            Opcode::GEQ => {
+                // see LEQ
+                let b = self.pop()?;
+                let a = self.pop()?;
+                self.push(Value::binary_op(a, b, |a, b| {
+                    if a >= b {
+                        Value::True
+                    } else {
+                        Value::False
                     }
                 })?);
             }
@@ -631,22 +650,43 @@ impl<'a> VM<'a> {
     }
 
     pub fn register_basic(&mut self) {
-        fn register_basic_instr(vm: &mut VM, name: &str, n_args: usize, op: Opcode) {
+        fn register_basic_instr(vm: &mut VM, name: &str, n_args: usize, ops: &[Opcode]) {
             let mut bl = Block::new(name, n_args);
-            bl.add_opcode(vm, op, None).unwrap();
+            ops.iter()
+                .for_each(|op| bl.add_opcode(vm, *op, None).unwrap());
             bl.add_opcode(vm, Opcode::Ret, None).unwrap();
             vm.add_block(bl);
         }
 
-        register_basic_instr(self, "add", 2, Opcode::Add);
-        register_basic_instr(self, "mul", 2, Opcode::Mul);
-        register_basic_instr(self, "div", 2, Opcode::Div);
-        register_basic_instr(self, "neg", 1, Opcode::Neg);
+        register_basic_instr(self, "add", 2, &[Opcode::Add]);
+        register_basic_instr(self, "mul", 2, &[Opcode::Mul]);
+        register_basic_instr(self, "div", 2, &[Opcode::Div]);
+        register_basic_instr(self, "neg", 1, &[Opcode::Neg]);
 
-        register_basic_instr(self, "not", 1, Opcode::Not);
-        register_basic_instr(self, "leq", 2, Opcode::LEQ);
+        register_basic_instr(self, "not", 1, &[Opcode::Not]);
+        register_basic_instr(self, "leq", 2, &[Opcode::LEQ]);
+        register_basic_instr(self, "geq", 2, &[Opcode::GEQ]);
 
-        register_basic_instr(self, "print", 1, Opcode::Print);
+        register_basic_instr(self, "print", 1, &[Opcode::Print]);
+
+        fn vm_floor(fiber: &mut Fiber) {
+            let val = fiber.pop().unwrap();
+            fiber.push(val.unary_op(|x| x.floor()).unwrap());
+    }
+        self.register_foreign("floor", vm_floor, 1);
+
+        fn vm_ceil(fiber: &mut Fiber) {
+            let val = fiber.pop().unwrap();
+            fiber.push(val.unary_op(|x| x.ceil()).unwrap());
+        }
+        self.register_foreign("ceil", vm_ceil, 1);
+
+        fn vm_pow(fiber: &mut Fiber) {
+            let b = fiber.pop().unwrap();
+            let a = fiber.pop().unwrap();
+            fiber.push(Value::binary_op(a, b, |a, b| Value::number(a.powf(b))).unwrap());
+        }
+        self.register_foreign("pow", vm_pow, 2);
     }
 
     pub fn register_internal(&mut self) {
@@ -665,6 +705,7 @@ impl<'a> VM<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vm::Opcode::*;
 
     const ENTRY: &'static str = r#"
         .data
@@ -712,8 +753,8 @@ mod tests {
 
     #[test]
     fn test_gc() {
+        let input = load_file("tests/basic/gc.sabi").unwrap();
         let mut buffer = Vec::new();
-        let input = load_file("tests/sabi/gc.sabi").unwrap();
         let mut vm = load_vm(&input, &mut buffer);
         vm.register_internal();
 
@@ -721,19 +762,80 @@ mod tests {
         let res = f.run();
         assert_eq!(res, Ok(Value::True));
     }
-    //     fn test_file(vm: &mut VM, file: impl AsRef<std::path::Path>) -> Result<Value, VMError> {
-    //         use std::io::Read;
 
-    //         let mut input = String::new();
+    fn test_instr(instr: Opcode, arg: Option<Arg>, vals: &[Value], result: Value) {
+        let buffer = Vec::new();
+        let mut vm = VM::new(Box::new(buffer));
+        let mut block = Block::new("test", 0);
+        vals.iter().for_each(|x| {
+            let i = block.add_data(*x);
+            block
+                .add_opcode(&mut vm, Opcode::Const, Some(&Arg::Int(i as isize)))
+                .unwrap();
+            block
+                .add_opcode(&mut vm, Opcode::Copy, Some(&Arg::Int(0)))
+                .unwrap();
+            block.add_opcode(&mut vm, Opcode::Print, None).unwrap();
+        });
 
-    //         std::fs::File::open(file)
-    //             .unwrap()
-    //             .read_to_string(&mut input)
-    //             .unwrap();
-    //         vm.parse_ir_block("test", &input)?;
-    //         let mut f = vm.new_fiber("test")?;
-    //         f.run()
-    //     }
+        block.add_opcode(&mut vm, instr, arg.as_ref()).unwrap();
+        block.add_opcode(&mut vm, Halt, None).unwrap();
+
+        vm.add_block(block);
+        println!("{:?}", vm);
+        let mut f = vm.new_fiber("test").unwrap();
+        let vm_result = f.run();
+        assert_eq!(vm_result, Ok(result));
+    }
+
+    #[test]
+    fn test_copy() {
+        test_instr(Copy, Some(Arg::Int(0)), &[Value::number(10.)], Value::number(10.));
+    }
+    #[test]
+    fn test_not() {
+        test_instr(Not, None, &[Value::true_val()], Value::false_val());
+        test_instr(Not, None, &[Value::false_val()], Value::true_val());
+        test_instr(Not, None, &[Value::nil()], Value::true_val());
+        test_instr(Not, None, &[Value::number(10.)], Value::false_val());
+    }
+    #[test]
+    fn test_add() {
+        test_instr(Add, None, &[Value::number(10.), Value::number(2.)], Value::number(12.));
+    }
+    #[test]
+    fn test_mul() {
+        test_instr(Mul, None, &[Value::number(10.), Value::number(2.)], Value::number(20.));
+    }
+    #[test]
+    fn test_div() {
+        test_instr(Div, None, &[Value::number(10.), Value::number(2.)], Value::number(5.));
+    }
+    #[test]
+    fn test_neg() {
+        test_instr(Neg, None, &[Value::number(10.)], Value::number(-10.));
+    }
+    #[test]
+    fn test_leq() {
+        test_instr(
+            LEQ,
+            None,
+            &[Value::number(10.), Value::number(10.)],
+            Value::True,
+        );
+        test_instr(
+            LEQ,
+            None,
+            &[Value::number(9.), Value::number(10.)],
+            Value::True,
+        );
+        test_instr(
+            LEQ,
+            None,
+            &[Value::number(10.), Value::number(9.)],
+            Value::False,
+        );
+    }
 
     //     fn test_instr(instr: &str, vals: &[Value], result: Value) {
     //         let mut vm = VM::default();

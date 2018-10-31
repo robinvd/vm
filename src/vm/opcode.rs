@@ -18,6 +18,7 @@ pub enum Opcode {
 
     // vals
     Const,
+    Num,
     Nil,
     True,
     False,
@@ -31,6 +32,7 @@ pub enum Opcode {
     // bool
     Not,
     LEQ,
+    GEQ,
 
     // jmp
     JmpT,
@@ -64,21 +66,22 @@ impl Opcode {
             | Opcode::Store
             | Opcode::Call
             | Opcode::CallForeign
+            | Opcode::Num
             | Opcode::Copy => true,
             _ => false,
         }
     }
 
-    pub fn stack_effect(&self) -> Option<isize> {
-        use self::Opcode::*;
-        let x = match *self {
-            // general
-            Halt | Pop | Print | Add | Mul | Div | Neg | LEQ | JmpT | Store | Index | True
-            | False | Nil => -1,
-            Const | Copy | New | Load => 1,
-            Not | Jmp | Nop => 0,
-            Call | CallForeign | Ret => return None,
-        };
-        Some(x)
-    }
+    // pub fn stack_effect(&self) -> Option<isize> {
+    //     use self::Opcode::*;
+    //     let x = match *self {
+    //         // general
+    //         Halt | Pop | Print | Add | Mul | Div | Neg | LEQ | JmpT | Store | Index | True
+    //         | False | Nil => -1,
+    //         Const | Copy | New | Load => 1,
+    //         Not | Jmp | Nop => 0,
+    //         Call | CallForeign | Ret => return None,
+    //     };
+    //     Some(x)
+    // }
 }

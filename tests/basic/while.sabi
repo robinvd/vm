@@ -1,6 +1,6 @@
 fn main() {
     let x = 0
-    while leq(x, 3) {
+    while leq(x, 3.5) {
         x = add(x, 1)
         print(x)
     }

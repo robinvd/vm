@@ -49,42 +49,42 @@ pub fn test_file(file: impl AsRef<std::path::Path>) -> (Vec<u8>, Result<Value, V
 
 #[test]
 fn test_while() {
-    let (out, res) = test_file("tests/sabi/while.sabi");
+    let (out, res) = test_file("tests/basic/while.sabi");
     assert_eq!(res, Ok(Value::number(0.)));
-    assert_eq!(out, b"1\n2\n3\n");
+    assert_eq!(out, b"1\n2\n3\n4\n");
 }
 
 #[test]
 fn test_if() {
-    let (out, res) = test_file("tests/sabi/if.sabi");
+    let (out, res) = test_file("tests/basic/if.sabi");
     assert_eq!(res, Ok(Value::number(0.)));
-    assert_eq!(out, b"3\n");
+    assert_eq!(out, b"6\n");
 }
 
 #[test]
 fn test_sqrt() {
-    let (out, res) = test_file("tests/sabi/sqrt.sabi");
+    let (out, res) = test_file("tests/programs/sqrt.sabi");
     assert_eq!(res, Ok(Value::number(0.)));
     assert_eq!(out, b"1024\n");
 }
 
 #[test]
 fn test_function() {
-    let (out, res) = test_file("tests/sabi/function.sabi");
+    let (out, res) = test_file("tests/basic/function.sabi");
     assert_eq!(res, Ok(Value::number(0.)));
     assert_eq!(out, b"1\n");
 }
 
 #[test]
 fn test_literals() {
-    let (out, res) = test_file("tests/sabi/literals.sabi");
+    let (out, res) = test_file("tests/basic/literals.sabi");
     assert_eq!(res, Ok(Value::number(0.)));
     assert_eq!(out, b"[1, 2]\n{1 = 2}\n");
 }
 
 #[test]
 fn test_index() {
-    let (out, res) = test_file("tests/sabi/index.sabi");
+    let (out, res) = test_file("tests/basic/index.sabi");
     assert_eq!(res, Ok(Value::number(0.)));
     assert_eq!(out, b"1\n3\n2\n4\n");
 }

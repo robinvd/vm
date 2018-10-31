@@ -68,6 +68,7 @@ impl<'a> Context<'a> {
                 let end_label = self.block.reserve_fresh_label("endif")?;
 
                 self.compile_expr(vm, p)?;
+                self.add_opcode(vm, Opcode::Not, None)?;
                 self.add_opcode(vm, Opcode::JmpT, Some(&Arg::Text(&f_label)))?;
 
                 for ref a in t {
