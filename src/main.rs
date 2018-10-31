@@ -1,5 +1,4 @@
 #![recursion_limit = "1000"] 
-#![feature(nll)]
 
 use std::fs;
 use std::io::{Read};

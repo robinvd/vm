@@ -1,0 +1,42 @@
+image: 'rustlang/rust:nightly'
+
+stages:
+  - build
+  - test
+  - doc
+
+variables:
+  CARGO_HOME: $CI_PROJECT_DIR/cargo
+  APT_CACHE_DIR: $CI_PROJECT_DIR/apt
+
+build:
+  stage: build
+  script:
+    - rustc --version
+    - cargo --version
+    - cargo build --verbose
+
+test:
+  stage: test
+  script:
+    - rustc --version
+    - cargo --version
+    - cargo test --all --verbose
+
+pages:
+  stage: doc
+  script:
+    - cargo doc --no-deps
+    - mv target/doc public
+    - echo '<meta http-equiv="refresh" content="0; url=sabi">' > public/index.html
+  artifacts:
+    paths:
+      - public
+  only:
+    - master
+
+# cache:
+#   paths:
+#     - apt/
+#     - cargo/
+#     - target/
