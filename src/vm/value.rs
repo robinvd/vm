@@ -23,7 +23,7 @@ impl GCObject {
         }
     }
 
-    pub fn deep_clone(&self) -> GCObject {
+    pub fn deep_clone(self) -> GCObject {
         let val = unsafe { self.val.as_ref() };
         Self::new((*val).clone())
     }
@@ -82,11 +82,23 @@ impl fmt::Display for Value {
     }
 }
 
+impl std::ops::Not for Value {
+    type Output = Value;
+
+    fn not(self) -> Self {
+        if self.is_true() {
+            Value::False
+        } else {
+            Value::True
+        }
+    }
+}
+
 impl Value {
-    pub fn deep_clone(&self) -> Self {
+    pub fn deep_clone(self) -> Self {
         match self {
             Value::Object(o) => Value::Object(o.deep_clone()),
-            x => x.clone(),
+            x => x,
         }
     }
 
@@ -114,14 +126,6 @@ impl Value {
             Ok(Value::number(f(a)))
         } else {
             Err(VMError::RuntimeError("combine not numbers".to_owned()))
-        }
-    }
-
-    pub fn not(self) -> Self {
-        if self.is_true() {
-            Value::False
-        } else {
-            Value::True
         }
     }
 
@@ -203,7 +207,7 @@ impl ObjectInfo {
     pub fn new(val: Object) -> Self {
         Self {
             mark: Cell::new(false),
-            val: val,
+            val,
         }
     }
 
@@ -267,7 +271,7 @@ impl fmt::Display for Object {
 }
 
 impl Traverse for Object {
-    fn traverse<F>(&self, mut f: &mut F)
+    fn traverse<F>(&self, f: &mut F)
     where
         F: FnMut(&Value),
     {
@@ -296,6 +300,6 @@ impl Object {
             _ => return Err(VMError::NotIndexable),
         };
 
-        Ok(val.map(|x| *x).unwrap_or(Value::Nil))
+        Ok(val.cloned().unwrap_or(Value::Nil))
     }
 }

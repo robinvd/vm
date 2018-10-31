@@ -3,12 +3,12 @@ use std::collections::HashMap;
 use combine::char::{letter, string};
 use combine::range::{recognize, take_while, take_while1};
 use combine::{
-    any, attempt, between, choice, eof, many, many1, one_of, optional, sep_by, sep_by1, ParseError,
+    any, attempt, between, choice, eof, many, optional, sep_by, sep_by1, ParseError,
     Parser, RangeStream,
 };
 
 use crate::parser::*;
-use crate::vm::value::{GCObject, Object, Value};
+use crate::vm::value::{Object, Value};
 
 #[derive(Debug, PartialEq)]
 pub struct Function<'a> {
@@ -253,7 +253,7 @@ where
         args: between(text("("), text(")"), sep_by(ident(), text(","))),
         body: between(text("{"), text("}"), many(attempt(bytecode::parse_instr()))),
     })
-    .map(|x| TopLevel::BcFunction(x))
+    .map(TopLevel::BcFunction)
 }
 
 pub fn parse_file<'a, I>() -> impl Parser<Input = I, Output = Vec<TopLevel<'a>>>

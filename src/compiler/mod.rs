@@ -56,7 +56,7 @@ impl<'a> Context<'a> {
                 self.add_opcode(vm, Opcode::Not, None)?;
                 self.add_opcode(vm, Opcode::JmpT, Some(&Arg::Text(&done_label)))?;
 
-                for ref a in body {
+                for a in body {
                     self.compile_expr(vm, &a)?;
                 }
 
@@ -71,7 +71,7 @@ impl<'a> Context<'a> {
                 self.add_opcode(vm, Opcode::Not, None)?;
                 self.add_opcode(vm, Opcode::JmpT, Some(&Arg::Text(&f_label)))?;
 
-                for ref a in t {
+                for a in t {
                     self.compile_expr(vm, &a)?;
                 }
 
@@ -79,7 +79,7 @@ impl<'a> Context<'a> {
                 self.block.add_label(&f_label)?;
 
                 if let Some(f) = maybe_f {
-                    for ref a in f {
+                    for a in f {
                         self.compile_expr(vm, &a)?;
                     }
                 }
@@ -101,14 +101,14 @@ impl<'a> Context<'a> {
                 let loc = self
                     .names
                     .get(name)
-                    .ok_or(VMError::Msg("local var not found".to_owned()))?;
+                    .ok_or_else(|| VMError::Msg("local var not found".to_owned()))?;
                 self.add_opcode(vm, Opcode::Load, Some(&Arg::Int(*loc as isize)))?;
             }
             Expr::Assign(name, e) => {
                 let loc = *self
                     .names
                     .get(name)
-                    .ok_or(VMError::Msg("local assign not found".to_owned()))?;
+                    .ok_or_else(|| VMError::Msg("local assign not found".to_owned()))?;
                 self.compile_expr(vm, e)?;
                 self.add_opcode(vm, Opcode::Store, Some(&Arg::Int(loc as isize)))?;
             }
@@ -137,14 +137,14 @@ impl<'a> Context<'a> {
 pub fn compile_f(vm: &mut VM, f: &Function) -> Result<(), VMError> {
     let mut context = Context::new(f.name, f.args.len());
 
-    for ref a in f.args.iter() {
+    for a in &f.args {
         let i = context.insert_name(&a);
         context
             .block
             .add_opcode(vm, Opcode::Store, Some(&Arg::Int(i as isize)))?;
     }
 
-    for ref a in &f.body {
+    for a in &f.body {
         context.compile_expr(vm, &a)?;
     }
     context.block.add_opcode(vm, Opcode::Nil, None)?;
@@ -157,7 +157,7 @@ pub fn compile_f(vm: &mut VM, f: &Function) -> Result<(), VMError> {
 pub fn compile_bc_f(vm: &mut VM, f: &BcFunction) -> Result<(), VMError> {
     let mut bl = Block::new(f.name.to_owned(), f.args.len());
 
-    for ref a in &f.body {
+    for a in &f.body {
         bl.parse_instr(vm, a)?;
     }
 
@@ -165,12 +165,12 @@ pub fn compile_bc_f(vm: &mut VM, f: &BcFunction) -> Result<(), VMError> {
     Ok(())
 }
 
-pub fn compile(vm: &mut VM, fs: &Vec<TopLevel>) -> Result<(), VMError> {
+pub fn compile(vm: &mut VM, fs: &[TopLevel]) -> Result<(), VMError> {
     for f in fs.iter() {
         match f {
             TopLevel::Function(f) => compile_f(vm, f),
             TopLevel::BcFunction(f) => compile_bc_f(vm, f),
-            TopLevel::Use(us) => Ok(()),
+            TopLevel::Use(_us) => unimplemented!(),
         }?;
     }
 

@@ -6,17 +6,9 @@ fn is_space(x: char) -> bool {
 }
 
 fn is_char(x: char) -> bool {
-    if (x >= 'a' && x <= 'z') || (x >= 'A' && x <= 'Z') {
-        true
-    } else {
-        false
-    }
+    (x >= 'a' && x <= 'z') || (x >= 'A' && x <= 'Z')
 }
 
 fn is_num(x: char) -> bool {
-    if x >= '0' && x <= '9' {
-        true
-    } else {
-        false
-    }
+    x >= '0' && x <= '9'
 }

@@ -1,9 +1,6 @@
 #![recursion_limit = "1000"] 
 #![feature(nll)]
 
-#[macro_use]
-extern crate combine;
-
 use std::fs;
 use std::io::{Read};
 

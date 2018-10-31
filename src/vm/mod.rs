@@ -1,6 +1,6 @@
 use std::collections::{HashMap, LinkedList};
 use std::sync::{Arc, Mutex};
-use std::{fmt, io, mem};
+use std::{fmt, io};
 
 use crate::parser::bytecode::{self, Arg, Instr};
 
@@ -18,7 +18,8 @@ pub enum VMError {
     Halt,
     RuntimeError(String),
     ParseErr(String),
-    WrongOpCode,
+    FunctionNotFound(String),
+    WrongOpCode(u8),
     EmptyPop,
     CombineErr(String),
     Msg(String),
@@ -74,7 +75,7 @@ impl fmt::Debug for Block {
                 // }
             }
 
-            writeln!(f, "");
+            writeln!(f);
             i += 1;
         }
         writeln!(f, "labels {:?}", self.labels);
@@ -96,11 +97,11 @@ impl<'a> FState<'a> {
     }
 
     pub fn advance_opcode(&mut self) -> Opcode {
-        let op = self.current_block.code[self.code_ptr].clone();
+        let op = self.current_block.code[self.code_ptr];
         self.code_ptr += 1;
 
         // internal opcodes should always be valid
-        Opcode::from_u8(op).expect(&format!("{} not a valid opcode", op))
+        Opcode::from_u8(op).ok_or_else(|| VMError::WrongOpCode(op)).unwrap()
     }
 
     pub fn advance_u16(&mut self) -> u16 {
@@ -124,7 +125,7 @@ impl<'a> FState<'a> {
 
 impl<'a, 'write> Drop for Fiber<'a, 'write> {
     fn drop(&mut self) {
-        for o in self.all_gc.iter() {
+        for o in &self.all_gc {
             unsafe {
                 Box::from_raw(o.val.as_ptr());
             }
@@ -166,12 +167,12 @@ impl<'a, 'write> Fiber<'a, 'write> {
             }
         };
 
-        for v in self.value_stack.iter() {
+        for v in &self.value_stack {
             v.traverse(&mut f)
         }
 
-        for fst in self.f.iter() {
-            for v in fst.locals.iter() {
+        for fst in &self.f {
+            for v in &fst.locals {
                 v.traverse(&mut f)
             }
         }
@@ -188,7 +189,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
         }
         self.all_gc = new;
 
-        for v in self.value_stack.iter() {
+        for v in &self.value_stack {
             v.traverse(&mut f)
         }
     }
@@ -208,17 +209,19 @@ impl<'a, 'write> Fiber<'a, 'write> {
         self.f.last_mut().expect("empty fiber")
     }
 
-    pub fn push_frame(&mut self, f_index: usize) {
+    pub fn push_frame(&mut self, f_index: usize) -> Result<(), VMError> {
         let block_name = &self.base.fn_label_index[f_index];
         let block_index = *self
             .base
             .fn_labels
             .get(block_name)
-            .expect(&format!("function {} not found", block_name));
+            .ok_or_else(|| VMError::FunctionNotFound(block_name.to_owned()))?;
         let new_block = &self.base.blocks[block_index];
         let f = FState::new(new_block, self.value_stack.len() - new_block.n_args);
 
         self.f.push(f);
+
+        Ok(())
     }
 
     pub fn pop_frame(&mut self) {
@@ -269,11 +272,11 @@ impl<'a, 'write> Fiber<'a, 'write> {
             }
             Opcode::Store => {
                 let x = self.current_f().advance_u16() as usize;
-                self.current_f().locals[x] = self.pop()?
+                self.current_f().locals[x] = self.pop()?;
             }
             Opcode::Call => {
                 let x = self.current_f().advance_u16();
-                self.push_frame(x as usize)
+                self.push_frame(x as usize)?;
             }
             Opcode::CallForeign => {
                 let f_index = self.current_f().advance_u16();
@@ -309,7 +312,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
             }
             Opcode::Not => {
                 let a = self.pop()?;
-                self.push(a.not());
+                self.push(!a);
             }
             Opcode::LEQ => {
                 // leq(a,b) then the code will be (push not actual opcode)
@@ -353,7 +356,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 let index = self.pop()?;
                 let val = self.pop()?;
                 let result = val.index(index)?;
-                self.push(result)
+                self.push(result);
             }
             Opcode::Nop => {}
         };
@@ -581,7 +584,7 @@ impl<'a> fmt::Debug for VM<'a> {
         writeln!(f, "{:?}", self.fn_labels)?;
         writeln!(f, "{:?}", self.fn_label_index)?;
 
-        for b in self.blocks.iter() {
+        for b in &self.blocks {
             writeln!(f, "{:?}", b)?;
         }
 
@@ -597,8 +600,6 @@ pub struct VM<'write> {
     fn_foreign: Vec<fn(&mut Fiber)>,
     fn_foreign_labels: HashMap<String, usize>,
 
-    data: Vec<&'static str>,
-
     output: Arc<Mutex<Box<io::Write + 'write>>>,
 
     pub debug: bool,
@@ -613,8 +614,6 @@ impl<'a> VM<'a> {
             fn_label_index: Default::default(),
             fn_foreign: Default::default(),
             fn_foreign_labels: Default::default(),
-
-            data: Default::default(),
 
             output: Arc::new(Mutex::new(output)),
 

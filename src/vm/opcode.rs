@@ -57,7 +57,7 @@ impl Opcode {
         }
     }
 
-    pub fn has_arg(&self) -> bool {
+    pub fn has_arg(self) -> bool {
         match self {
             Opcode::Const
             | Opcode::Jmp
