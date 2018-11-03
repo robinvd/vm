@@ -615,12 +615,12 @@ pub struct VM<'write> {
 impl<'a> VM<'a> {
     pub fn new(output: Box<io::Write + 'a + Sync>) -> Self {
         Self {
-            blocks: Default::default(),
+            blocks: Vec::default(),
 
-            fn_labels: Default::default(),
-            fn_label_index: Default::default(),
-            fn_foreign: Default::default(),
-            fn_foreign_labels: Default::default(),
+            fn_labels: HashMap::new(),
+            fn_label_index: Vec::new(),
+            fn_foreign: Vec::new(),
+            fn_foreign_labels: HashMap::new(),
 
             output: Arc::new(Mutex::new(output)),
 
@@ -688,6 +688,22 @@ impl<'a> VM<'a> {
             vm.add_block(bl);
         }
 
+        fn vm_floor(fiber: &mut Fiber) {
+            let val = fiber.pop().unwrap();
+            fiber.push(val.unary_op(|x| x.floor()).unwrap());
+        }
+
+        fn vm_ceil(fiber: &mut Fiber) {
+            let val = fiber.pop().unwrap();
+            fiber.push(val.unary_op(|x| x.ceil()).unwrap());
+        }
+
+        fn vm_pow(fiber: &mut Fiber) {
+            let b = fiber.pop().unwrap();
+            let a = fiber.pop().unwrap();
+            fiber.push(Value::binary_op(a, b, |a, b| Value::number(a.powf(b))).unwrap());
+        }
+
         register_basic_instr(self, "add", 2, &[Opcode::Add]);
         register_basic_instr(self, "mul", 2, &[Opcode::Mul]);
         register_basic_instr(self, "div", 2, &[Opcode::Div]);
@@ -699,23 +715,8 @@ impl<'a> VM<'a> {
 
         register_basic_instr(self, "print", 1, &[Opcode::Print]);
 
-        fn vm_floor(fiber: &mut Fiber) {
-            let val = fiber.pop().unwrap();
-            fiber.push(val.unary_op(|x| x.floor()).unwrap());
-        }
         self.register_foreign("floor", vm_floor, 1);
-
-        fn vm_ceil(fiber: &mut Fiber) {
-            let val = fiber.pop().unwrap();
-            fiber.push(val.unary_op(|x| x.ceil()).unwrap());
-        }
         self.register_foreign("ceil", vm_ceil, 1);
-
-        fn vm_pow(fiber: &mut Fiber) {
-            let b = fiber.pop().unwrap();
-            let a = fiber.pop().unwrap();
-            fiber.push(Value::binary_op(a, b, |a, b| Value::number(a.powf(b))).unwrap());
-        }
         self.register_foreign("pow", vm_pow, 2);
     }
 
