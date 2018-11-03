@@ -1,4 +1,5 @@
 #![recursion_limit = "1000"]
+#![warn(clippy::all)]
 #![allow(clippy::redundant_closure, clippy::cast_lossless)]
 
 extern crate regex;
