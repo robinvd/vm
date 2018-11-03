@@ -1,7 +1,5 @@
 use combine::range::{take_while, take_while1};
-use combine::{
-    attempt, choice, eof, optional, token, ParseError, Parser, RangeStream,
-};
+use combine::{attempt, choice, eof, optional, token, ParseError, Parser, RangeStream};
 
 use super::*;
 

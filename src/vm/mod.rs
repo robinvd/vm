@@ -101,7 +101,9 @@ impl<'a> FState<'a> {
         self.code_ptr += 1;
 
         // internal opcodes should always be valid
-        Opcode::from_u8(op).ok_or_else(|| VMError::WrongOpCode(op)).unwrap()
+        Opcode::from_u8(op)
+            .ok_or_else(|| VMError::WrongOpCode(op))
+            .unwrap()
     }
 
     pub fn advance_u16(&mut self) -> u16 {
@@ -200,7 +202,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
 
     pub fn pop(&mut self) -> Result<Value, VMError> {
         if self.value_stack.len() <= self.current_f().stack_start {
-            return Err(VMError::EmptyPop)
+            return Err(VMError::EmptyPop);
         }
         self.value_stack.pop().ok_or(VMError::EmptyPop)
     }
@@ -368,7 +370,11 @@ impl<'a, 'write> Fiber<'a, 'write> {
             if self.base.debug {
                 println!("stack: {:?}", self.value_stack);
                 println!("locals: {:?}", self.current_f().locals);
-                println!("code: {} {:04x}", self.current_f().current_block.name, self.current_f().code_ptr);
+                println!(
+                    "code: {} {:04x}",
+                    self.current_f().current_block.name,
+                    self.current_f().code_ptr
+                );
                 let mut input = String::new();
                 io::stdin().read_line(&mut input);
             }
@@ -814,7 +820,12 @@ mod tests {
 
     #[test]
     fn test_copy() {
-        test_instr(Copy, Some(Arg::Int(0)), &[Value::number(10.)], Value::number(10.));
+        test_instr(
+            Copy,
+            Some(Arg::Int(0)),
+            &[Value::number(10.)],
+            Value::number(10.),
+        );
     }
     #[test]
     fn test_not() {
@@ -825,15 +836,30 @@ mod tests {
     }
     #[test]
     fn test_add() {
-        test_instr(Add, None, &[Value::number(10.), Value::number(2.)], Value::number(12.));
+        test_instr(
+            Add,
+            None,
+            &[Value::number(10.), Value::number(2.)],
+            Value::number(12.),
+        );
     }
     #[test]
     fn test_mul() {
-        test_instr(Mul, None, &[Value::number(10.), Value::number(2.)], Value::number(20.));
+        test_instr(
+            Mul,
+            None,
+            &[Value::number(10.), Value::number(2.)],
+            Value::number(20.),
+        );
     }
     #[test]
     fn test_div() {
-        test_instr(Div, None, &[Value::number(10.), Value::number(2.)], Value::number(5.));
+        test_instr(
+            Div,
+            None,
+            &[Value::number(10.), Value::number(2.)],
+            Value::number(5.),
+        );
     }
     #[test]
     fn test_neg() {
@@ -868,7 +894,8 @@ mod tests {
 
         let mut main = Block::new("main", 0);
         main.add_opcode(&mut vm, Num, Some(&Arg::Int(21))).unwrap();
-        main.add_opcode(&mut vm, Call, Some(&Arg::Text("wrong"))).unwrap();
+        main.add_opcode(&mut vm, Call, Some(&Arg::Text("wrong")))
+            .unwrap();
         main.add_opcode(&mut vm, Ret, None).unwrap();
 
         let mut wrong = Block::new("wrong", 0);

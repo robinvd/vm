@@ -1,4 +1,4 @@
-#![recursion_limit = "1000"] 
+#![recursion_limit = "1000"]
 
 #[macro_use]
 extern crate criterion;
@@ -17,7 +17,8 @@ const ENTRY: &'static str = r#"
 "#;
 
 pub fn add_main(vm: &mut VM) {
-    vm.parse_ir_block("start", ENTRY).expect("failed to add main");
+    vm.parse_ir_block("start", ENTRY)
+        .expect("failed to add main");
 }
 
 fn load_file(file: impl AsRef<std::path::Path>) -> String {
@@ -34,9 +35,9 @@ fn load_file(file: impl AsRef<std::path::Path>) -> String {
 }
 
 fn load_vm<'a>(input: &'a str, buffer: &'a mut Vec<u8>) -> VM<'a> {
+    use combine::Parser;
     use sabi::compiler;
     use sabi::parser;
-    use combine::Parser;
 
     let mut vm = VM::new(Box::new(buffer));
     vm.register_basic();

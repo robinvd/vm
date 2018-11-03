@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use combine::char::{letter, string};
 use combine::range::{recognize, take_while, take_while1};
 use combine::{
-    any, attempt, between, choice, eof, many, optional, sep_by, sep_by1, ParseError,
-    Parser, RangeStream,
+    any, attempt, between, choice, eof, many, optional, sep_by, sep_by1, ParseError, Parser,
+    RangeStream,
 };
 
 use crate::parser::*;

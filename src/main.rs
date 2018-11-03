@@ -1,13 +1,13 @@
-#![recursion_limit = "1000"] 
+#![recursion_limit = "1000"]
 
 use std::fs;
-use std::io::{Read};
+use std::io::Read;
 
 use clap::{App, Arg};
 
-use sabi::vm;
 use sabi::compiler;
 use sabi::parser;
+use sabi::vm;
 
 fn main() {
     let matches = App::new("SABI VM")

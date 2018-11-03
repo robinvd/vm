@@ -141,7 +141,7 @@ impl Value {
         match self {
             Value::True => Some(true),
             Value::False => Some(false),
-            _ => None
+            _ => None,
         }
     }
 
