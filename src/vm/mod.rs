@@ -376,7 +376,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
                     self.current_f().code_ptr
                 );
                 let mut input = String::new();
-                io::stdin().read_line(&mut input);
+                io::stdin().read_line(&mut input).unwrap();
             }
             match self.step() {
                 Ok(_) => continue,
