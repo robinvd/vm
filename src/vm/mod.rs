@@ -107,7 +107,7 @@ impl<'a> FState<'a> {
     pub fn advance_u16(&mut self) -> u16 {
         // let slice = &self.current_block.code.as_slice()[self.code_ptr..self.code_ptr + 8].as_ptr();
         // let num: i64 = unsafe { *(*slice as *const i64) };
-        let num = (self.current_block.code[self.code_ptr] as u16) << 4
+        let num = (self.current_block.code[self.code_ptr] as u16) << 8
             | self.current_block.code[self.code_ptr + 1] as u16;
         self.code_ptr += 2;
 
@@ -368,6 +368,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
             if self.base.debug {
                 println!("stack: {:?}", self.value_stack);
                 println!("locals: {:?}", self.current_f().locals);
+                println!("code: {} {:04x}", self.current_f().current_block.name, self.current_f().code_ptr);
                 let mut input = String::new();
                 io::stdin().read_line(&mut input);
             }
@@ -448,7 +449,7 @@ impl Block {
                 },
                 Arg::Int(i) => *i as usize,
             };
-            self.code.push((num >> 4) as u8);
+            self.code.push((num >> 8) as u8);
             self.code.push(num as u8);
 
             // if self.debug {

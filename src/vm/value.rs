@@ -137,6 +137,22 @@ impl Value {
         }
     }
 
+    pub fn as_bool(self) -> Option<bool> {
+        match self {
+            Value::True => Some(true),
+            Value::False => Some(false),
+            _ => None
+        }
+    }
+
+    pub fn as_nil(self) -> bool {
+        if let Value::Nil = self {
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn to_number(self) -> Result<f64, VMError> {
         match self {
             Value::Number(n) => Ok(*n),
