@@ -1,9 +1,29 @@
-image: 'rustlang/rust:nightly'
+image: "$CI_REGISTRY_IMAGE:master"
 
 stages:
+  - docker
   - build
   - test
   - doc
+
+build-docker:
+  stage: docker
+  image: 'docker:git'
+  only: 
+    - schedules
+  services:
+    - docker:dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375/
+    # When using dind, it's wise to use the overlayfs driver for
+    # improved performance.
+    DOCKER_DRIVER: overlay2
+    IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+  before_script:
+    - docker login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY
+  script:
+    - docker build -t $IMAGE_TAG - < ./dockerfile
+    - docker push $IMAGE_TAG
 
 variables:
   CARGO_HOME: $CI_PROJECT_DIR/cargo
@@ -11,20 +31,46 @@ variables:
 
 build:
   stage: build
+  except: 
+    - schedules
+  artifacts:
+    paths:
+      - target
+    expire_in: 1 day
   script:
     - rustc --version
     - cargo --version
-    - cargo build --verbose
+    - cargo build
 
 test:
   stage: test
+  except: 
+    - schedules
   script:
     - rustc --version
     - cargo --version
-    - cargo test --all --verbose
+    - cargo test --all
+
+clippy:
+  stage: test
+  except: 
+    - schedules
+  script:
+    - cargo clippy --version
+    - cargo clippy -- -D warnings
+
+fmt:
+  stage: test
+  except: 
+    - schedules
+  script:
+    - cargo fmt --version
+    - cargo fmt -- --check
 
 pages:
   stage: doc
+  except: 
+    - schedules
   script:
     - cargo doc --no-deps
     - mv target/doc public
@@ -34,9 +80,3 @@ pages:
       - public
   only:
     - master
-
-# cache:
-#   paths:
-#     - apt/
-#     - cargo/
-#     - target/
