@@ -88,3 +88,10 @@ fn test_index() {
     assert_eq!(res, Ok(Value::number(0.)));
     assert_eq!(out, b"1\n3\n2\n4\n");
 }
+
+#[test]
+fn test_letorder() {
+    let (out, res) = test_file("tests/basic/letorder.sabi");
+    assert_eq!(res, Ok(Value::number(0.)));
+    assert_eq!(out, b"2\n");
+}

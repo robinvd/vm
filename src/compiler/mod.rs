@@ -92,8 +92,8 @@ impl<'a> Context<'a> {
                 }
 
                 for (name, expr) in names.iter().zip(exprs.iter()) {
-                    let loc = self.insert_name(name);
                     self.compile_expr(vm, expr)?;
+                    let loc = self.insert_name(name);
                     self.add_opcode(vm, Opcode::Store, Some(&Arg::Int(loc as isize)))?;
                 }
             }

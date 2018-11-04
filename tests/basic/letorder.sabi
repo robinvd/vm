@@ -1,0 +1,5 @@
+fn main() {
+    let x = 0
+    let x = add(x,2)
+    print(x)
+}
