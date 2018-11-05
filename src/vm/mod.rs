@@ -98,7 +98,7 @@ impl<'a> FState<'a> {
     pub fn advance_u16(&mut self) -> u16 {
         let num = unsafe {
             (*self.current_block.code.get_unchecked(self.code_ptr) as u16) << 8
-            | *self.current_block.code.get_unchecked(self.code_ptr + 1) as u16
+                | *self.current_block.code.get_unchecked(self.code_ptr + 1) as u16
         };
         self.code_ptr += 2;
 
