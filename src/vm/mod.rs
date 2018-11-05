@@ -52,42 +52,24 @@ pub struct FState<'a> {
     stack_start: usize,
 }
 
-impl fmt::Debug for Block {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "{}:", self.name);
-        let mut i = 0;
-        while i < self.code.len() {
-            let op = Opcode::from_u8(self.code[i]).unwrap();
-            if op == Opcode::Nop {
-                i += 1;
-                continue;
-            }
-
-            write!(f, "{:04x}: {:?}", i, op);
-            if op.has_arg() {
-                let num = (self.code[i + 1] as u16) << 4 | self.code[i + 2] as u16;
-                i += 2;
-
-                // if let Some(s) = self.label_index.get(num as usize) {
-                //     write!(f, " {}/{}", num, s);
-                // } else {
-                write!(f, " {}", num);
-                // }
-            }
-
-            writeln!(f);
-            i += 1;
-        }
-        writeln!(f, "labels {:?}", self.labels);
-        writeln!(f, "labeli {:?}", self.label_index);
-        writeln!(f, "const  {:?}", self.constants);
-
-        Ok(())
-    }
-}
-
 impl<'a> FState<'a> {
+    /// Create a new FState
+    ///
+    /// The last two opcodes in the code block should both be Ret or Halt
+    /// This makes sure we dont access the code buffer out of bounds
+    /// One would also be enough if we know that the second last opcode
+    ///     is not an argument
     pub fn new(current_block: &'a Block, stack_start: usize) -> Self {
+        let l = current_block.code.len();
+        if l >= 2
+            && (current_block.code[l] != Opcode::Ret as u8
+                || current_block.code[l] != Opcode::Halt as u8)
+            && (current_block.code[l - 1] != Opcode::Ret as u8
+                || current_block.code[l - 1] != Opcode::Halt as u8)
+        {
+            panic!("not valid ending intructions")
+        }
+
         Self {
             current_block,
             locals: vec![Value::Nil; current_block.local_n],
@@ -96,21 +78,28 @@ impl<'a> FState<'a> {
         }
     }
 
+    /// Get the next opcode.
+    ///
+    /// This function is safe because we check at jumps that it is a valid loc
+    /// And (TODO) we check that a module always ends with a halt/ret instruction
+    ///
+    /// The unchecked conversion into an opcode should be safe as it is al internal
     pub fn advance_opcode(&mut self) -> Opcode {
-        let op = self.current_block.code[self.code_ptr];
-        self.code_ptr += 1;
-
-        // internal opcodes should always be valid
-        Opcode::from_u8(op)
-            .ok_or_else(|| VMError::WrongOpCode(op))
-            .unwrap()
+        unsafe {
+            let op = *self.current_block.code.get_unchecked(self.code_ptr);
+            self.code_ptr += 1;
+            Opcode::from_u8_unchecked(op)
+        }
     }
 
+    /// Get a u16 literal from the code buffer
+    ///
+    /// See advance_opcode and new for safety explanation
     pub fn advance_u16(&mut self) -> u16 {
-        // let slice = &self.current_block.code.as_slice()[self.code_ptr..self.code_ptr + 8].as_ptr();
-        // let num: i64 = unsafe { *(*slice as *const i64) };
-        let num = (self.current_block.code[self.code_ptr] as u16) << 8
-            | self.current_block.code[self.code_ptr + 1] as u16;
+        let num = unsafe {
+            (*self.current_block.code.get_unchecked(self.code_ptr) as u16) << 8
+            | *self.current_block.code.get_unchecked(self.code_ptr + 1) as u16
+        };
         self.code_ptr += 2;
 
         num
@@ -119,6 +108,9 @@ impl<'a> FState<'a> {
     pub fn jump_to_label_index(&mut self, index: usize) -> Result<(), VMError> {
         let label = &self.current_block.label_index[index];
         let new_code_ptr = self.current_block.labels[label];
+        if new_code_ptr >= self.current_block.code.len() {
+            return Err(VMError::RuntimeError("jmp outside of code".to_owned()));
+        }
         self.code_ptr = new_code_ptr;
 
         Ok(())
@@ -365,6 +357,10 @@ impl<'a, 'write> Fiber<'a, 'write> {
         Ok(())
     }
 
+    pub fn trace(&mut self) -> Result<(), VMError> {
+        Ok(())
+    }
+
     pub fn run(&mut self) -> Result<Value, VMError> {
         loop {
             if self.base.debug {
@@ -399,6 +395,40 @@ pub struct Block {
 
     pub n_args: usize,
     pub local_n: usize,
+}
+
+impl fmt::Debug for Block {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "{}:", self.name);
+        let mut i = 0;
+        while i < self.code.len() {
+            let op = Opcode::from_u8(self.code[i]).unwrap();
+            if op == Opcode::Nop {
+                i += 1;
+                continue;
+            }
+
+            write!(f, "{:04x}: {:?}", i, op);
+            if op.has_arg() {
+                let num = (self.code[i + 1] as u16) << 4 | self.code[i + 2] as u16;
+                i += 2;
+
+                // if let Some(s) = self.label_index.get(num as usize) {
+                //     write!(f, " {}/{}", num, s);
+                // } else {
+                write!(f, " {}", num);
+                // }
+            }
+
+            writeln!(f);
+            i += 1;
+        }
+        writeln!(f, "labels {:?}", self.labels);
+        writeln!(f, "labeli {:?}", self.label_index);
+        writeln!(f, "const  {:?}", self.constants);
+
+        Ok(())
+    }
 }
 
 impl Block {

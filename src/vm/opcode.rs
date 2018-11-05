@@ -51,10 +51,14 @@ pub enum Opcode {
 impl Opcode {
     pub fn from_u8(n: u8) -> Option<Opcode> {
         if n <= Opcode::Nop as u8 {
-            Some(unsafe { mem::transmute(n) })
+            Some(unsafe { Self::from_u8_unchecked(n) })
         } else {
             None
         }
+    }
+
+    pub unsafe fn from_u8_unchecked(n: u8) -> Opcode {
+        mem::transmute(n)
     }
 
     pub fn has_arg(self) -> bool {
