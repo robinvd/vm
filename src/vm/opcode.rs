@@ -46,11 +46,12 @@ pub enum Opcode {
     // asyncjmp
     // await
     Nop,
+    End,
 }
 
 impl Opcode {
     pub fn from_u8(n: u8) -> Option<Opcode> {
-        if n <= Opcode::Nop as u8 {
+        if n <= Opcode::End as u8 {
             Some(unsafe { Self::from_u8_unchecked(n) })
         } else {
             None

@@ -69,8 +69,8 @@ fn main() {
         let parsed = parser::code::parse_file()
             .easy_parse(i)
             .expect("failed to parse");
-        add_main(&mut vm).expect("failed to add main");
         compiler::compile(&mut vm, &parsed.0).expect("failed to compile");
+        vm.add_start();
     }
 
     if matches.is_present("verbose") {
@@ -83,9 +83,4 @@ fn main() {
     if matches.is_present("verbose") {
         println!("result: {:?}", result);
     }
-}
-
-fn add_main(vm: &mut vm::VM) -> Result<(), vm::VMError> {
-    vm.parse_ir_block("start", ".data\n0\n.code\nconst 0\ncall main\nhalt")?;
-    Ok(())
 }

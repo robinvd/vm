@@ -59,17 +59,10 @@ impl<'a> FState<'a> {
     /// This makes sure we dont access the code buffer out of bounds
     /// One would also be enough if we know that the second last opcode
     ///     is not an argument
+    ///
+    /// This is always the case in a valid block
+    /// This function assumes it is given a valid block
     pub fn new(current_block: &'a Block, stack_start: usize) -> Self {
-        let l = current_block.code.len();
-        if l >= 2
-            && (current_block.code[l] != Opcode::Ret as u8
-                || current_block.code[l] != Opcode::Halt as u8)
-            && (current_block.code[l - 1] != Opcode::Ret as u8
-                || current_block.code[l - 1] != Opcode::Halt as u8)
-        {
-            panic!("not valid ending intructions")
-        }
-
         Self {
             current_block,
             locals: vec![Value::Nil; current_block.local_n],
@@ -353,6 +346,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 self.push(result);
             }
             Opcode::Nop => {}
+            Opcode::End => panic!("reached end of block"),
         };
         Ok(())
     }
@@ -454,11 +448,8 @@ impl Block {
         opcode: Opcode,
         arg: Option<&Arg>,
     ) -> Result<(), VMError> {
-        if opcode.has_arg() && arg.is_none() {
-            return Err(VMError::Msg("opcode has no arg".to_owned()));
-        }
-        if !opcode.has_arg() && arg.is_some() {
-            return Err(VMError::Msg("opcode has an arg".to_owned()));
+        if opcode.has_arg() != arg.is_some() {
+            return Err(VMError::Msg("opcode/arg do not match".to_owned()));
         }
 
         // if opcode.has_arg() {
@@ -494,6 +485,13 @@ impl Block {
         };
 
         Ok(())
+    }
+
+    pub fn add_finishing_opcode(&mut self, vm: &mut VM) {
+        self.add_opcode(vm, Opcode::End, None)
+            .expect("internal error");
+        self.add_opcode(vm, Opcode::End, None)
+            .expect("internal error");
     }
 
     pub fn add_data(&mut self, data: Value) -> usize {
@@ -666,11 +664,32 @@ impl<'a> VM<'a> {
         Ok(fiber)
     }
 
-    pub fn add_block(&mut self, block: Block) {
+    pub fn add_block(&mut self, mut block: Block) {
+        block.add_finishing_opcode(self);
+
+        unsafe { self.add_block_unchecked(block) };
+    }
+
+    pub unsafe fn add_block_unchecked(&mut self, block: Block) {
         let pos = self.blocks.len();
         let name = block.name.clone();
         self.blocks.push(block);
         self.fn_labels.insert(name, pos);
+    }
+
+    pub fn add_start(&mut self) {
+        let mut block = Block::new("start", 0);
+        block
+            .add_opcode(self, Opcode::Num, Some(&Arg::Int(0)))
+            .expect("internal error");
+        block
+            .add_opcode(self, Opcode::Call, Some(&Arg::Text("main")))
+            .expect("internal error");
+        block
+            .add_opcode(self, Opcode::Halt, None)
+            .expect("internal error");
+
+        self.add_block(block);
     }
 
     pub fn parse_ir_block(&mut self, name: impl Into<String>, input: &str) -> Result<(), VMError> {
@@ -692,7 +711,7 @@ impl<'a> VM<'a> {
         bl.add_opcode(self, Opcode::CallForeign, Some(&Arg::Int(index as isize)))
             .unwrap();
         bl.add_opcode(self, Opcode::Ret, None).unwrap();
-        self.add_block(bl);
+        unsafe { self.add_block_unchecked(bl) };
     }
 
     pub fn register_io(&mut self) {
@@ -715,7 +734,7 @@ impl<'a> VM<'a> {
             ops.iter()
                 .for_each(|op| bl.add_opcode(vm, *op, None).unwrap());
             bl.add_opcode(vm, Opcode::Ret, None).unwrap();
-            vm.add_block(bl);
+            unsafe { vm.add_block_unchecked(bl) };
         }
 
         fn vm_floor(fiber: &mut Fiber) {
@@ -768,20 +787,6 @@ mod tests {
     use super::*;
     use crate::vm::Opcode::*;
 
-    const ENTRY: &'static str = r#"
-        .data
-        0
-        .code
-        const 0
-        call main
-        halt
-    "#;
-
-    pub fn add_main(vm: &mut VM) -> Result<(), VMError> {
-        vm.parse_ir_block("start", ENTRY)?;
-        Ok(())
-    }
-
     fn load_file(file: impl AsRef<std::path::Path>) -> Result<String, VMError> {
         use std::io::Read;
 
@@ -806,8 +811,8 @@ mod tests {
             .easy_parse(input)
             .expect("failed to parse");
 
-        add_main(&mut vm).expect("failed to add main");
         compiler::compile(&mut vm, &parsed.0).expect("failed to compile");
+        vm.add_start();
 
         vm
     }
@@ -841,6 +846,7 @@ mod tests {
 
         block.add_opcode(&mut vm, instr, arg.as_ref()).unwrap();
         block.add_opcode(&mut vm, Halt, None).unwrap();
+        block.add_finishing_opcode(&mut vm);
 
         vm.add_block(block);
         println!("{:?}", vm);
