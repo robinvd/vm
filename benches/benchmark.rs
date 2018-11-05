@@ -34,12 +34,12 @@ fn load_file(file: impl AsRef<std::path::Path>) -> String {
     input
 }
 
-fn load_vm<'a>(input: &'a str, buffer: &'a mut Vec<u8>) -> VM<'a> {
+fn load_vm<'a>(input: &'a str, buffer: Box<'a + std::io::Write + Sync>) -> VM<'a> {
     use combine::Parser;
     use sabi::compiler;
     use sabi::parser;
 
-    let mut vm = VM::new(Box::new(buffer));
+    let mut vm = VM::new(buffer);
     vm.register_basic();
 
     let parsed = parser::code::parse_file()
@@ -52,24 +52,27 @@ fn load_vm<'a>(input: &'a str, buffer: &'a mut Vec<u8>) -> VM<'a> {
     vm
 }
 
-fn criterion_benchmark(c: &mut Criterion) {
+fn fib_benchmark(c: &mut Criterion) {
     c.bench_function("fib 20", |b| {
         let file = load_file("tests/programs/fib.sabi");
         let mut buffer = Vec::new();
-        let mut vm = load_vm(&file, &mut buffer);
-        add_main(&mut vm);
-
-        b.iter(|| vm.new_fiber("start").unwrap().run())
-    });
-    c.bench_function("sqrt 1048576", |b| {
-        let file = load_file("tests/programs/sqrt.sabi");
-        let mut buffer = Vec::new();
-        let mut vm = load_vm(&file, &mut buffer);
+        let mut vm = load_vm(&file, Box::new(&mut buffer));
         add_main(&mut vm);
 
         b.iter(|| vm.new_fiber("start").unwrap().run())
     });
 }
 
-criterion_group!(benches, criterion_benchmark);
+fn sqrt_benchmark(c: &mut Criterion) {
+    c.bench_function("sqrt 1048576", |b| {
+        let file = load_file("tests/programs/sqrt.sabi");
+        let mut buffer = std::io::sink();
+        let mut vm = load_vm(&file, Box::new(&mut buffer));
+        add_main(&mut vm);
+
+        b.iter(|| vm.new_fiber("start").unwrap().run())
+    });
+}
+
+criterion_group!(benches, sqrt_benchmark, fib_benchmark);
 criterion_main!(benches);
