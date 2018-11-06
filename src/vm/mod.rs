@@ -39,17 +39,22 @@ pub struct Fiber<'a, 'write> {
     base: &'a VM<'write>,
     f: Vec<FState<'a>>,
     value_stack: Vec<Value>,
+    local_stack: Vec<Value>,
     all_gc: LinkedList<GCObject>,
 }
 
-/// a single function
-/// it has its own labels
+/// a single function,
+/// it has its own labels,
 /// it shares a stack
+///
+/// The struct only contains 'stack' values
+/// so that no allocations have to happen by creating a new stack frame
+/// (except for growing both stacks)
 pub struct FState<'a> {
     current_block: &'a Block,
-    locals: Vec<Value>,
     code_ptr: usize,
     stack_start: usize,
+    local_stack_start: usize,
 }
 
 impl<'a> FState<'a> {
@@ -62,12 +67,12 @@ impl<'a> FState<'a> {
     ///
     /// This is always the case in a valid block
     /// This function assumes it is given a valid block
-    pub fn new(current_block: &'a Block, stack_start: usize) -> Self {
+    pub fn new(current_block: &'a Block, stack_start: usize, local_stack_start: usize) -> Self {
         Self {
             current_block,
-            locals: vec![Value::Nil; current_block.local_n],
             code_ptr: 0,
             stack_start,
+            local_stack_start,
         }
     }
 
@@ -122,10 +127,12 @@ impl<'a, 'write> Drop for Fiber<'a, 'write> {
 
 impl<'a, 'write> Fiber<'a, 'write> {
     pub fn new(base: &'a VM<'write>, f: FState<'a>) -> Self {
+        let local_n = f.current_block.local_n;
         Self {
             base,
             f: vec![f],
             value_stack: Vec::default(),
+            local_stack: vec![Value::nil(); local_n],
             all_gc: LinkedList::new(),
         }
     }
@@ -158,10 +165,8 @@ impl<'a, 'write> Fiber<'a, 'write> {
             v.traverse(&mut f)
         }
 
-        for fst in &self.f {
-            for v in &fst.locals {
-                v.traverse(&mut f)
-            }
+        for v in &self.local_stack {
+            v.traverse(&mut f)
         }
 
         let mut new = LinkedList::new();
@@ -204,7 +209,15 @@ impl<'a, 'write> Fiber<'a, 'write> {
             .get(block_name)
             .ok_or_else(|| VMError::FunctionNotFound(block_name.to_owned()))?;
         let new_block = &self.base.blocks[block_index];
-        let f = FState::new(new_block, self.value_stack.len() - new_block.n_args);
+        let f = FState::new(
+            new_block,
+            self.value_stack.len() - new_block.n_args,
+            self.local_stack.len(),
+        );
+
+        let old_len = self.local_stack.len();
+        self.local_stack
+            .resize(old_len + new_block.local_n, Value::nil());
 
         self.f.push(f);
 
@@ -219,6 +232,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
             Value::Nil
         };
         self.value_stack.truncate(old.stack_start);
+        self.local_stack.truncate(old.local_stack_start);
         self.value_stack.push(ret_val);
     }
 
@@ -254,12 +268,16 @@ impl<'a, 'write> Fiber<'a, 'write> {
             }
             Opcode::Load => {
                 let x = self.current_f().advance_u16() as usize;
-                let val = self.current_f().locals[x];
+                // let val = self.current_f().locals[x];
+                let start = self.current_f().local_stack_start;
+                let val = self.local_stack[start + x];
                 self.push(val);
             }
             Opcode::Store => {
                 let x = self.current_f().advance_u16() as usize;
-                self.current_f().locals[x] = self.pop()?;
+                // self.current_f().locals[x] = self.pop()?;
+                let start = self.current_f().local_stack_start;
+                self.local_stack[start + x] = self.pop()?;
             }
             Opcode::Call => {
                 let x = self.current_f().advance_u16();
@@ -358,7 +376,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
     pub fn debug_run(&mut self) -> Result<Value, VMError> {
         loop {
             println!("stack: {:?}", self.value_stack);
-            println!("locals: {:?}", self.current_f().locals);
+            println!("locals: {:?}", self.local_stack);
             println!(
                 "code: {} {:04x}",
                 self.current_f().current_block.name,
@@ -666,7 +684,7 @@ impl<'a> VM<'a> {
 
     pub fn new_fiber<'b>(&'b self, label: &str) -> Result<Fiber<'b, 'a>, VMError> {
         // todo hangle args
-        let fs = FState::new(&self.blocks[self.fn_labels[label]], 0);
+        let fs = FState::new(&self.blocks[self.fn_labels[label]], 0, 0);
         let fiber = Fiber::new(self, fs);
 
         Ok(fiber)
@@ -954,4 +972,43 @@ mod tests {
 
         assert_eq!(res, Err(VMError::EmptyPop))
     }
+
+    #[test]
+    fn test_fiber_local_stack() {
+        let buffer = Vec::new();
+        let mut vm = VM::new(Box::new(buffer));
+
+        let mut main = Block::new("main", 0);
+        main.local_n = 1;
+        main.add_opcode(&mut vm, Opcode::Num, Some(&Arg::Int(5)))
+            .unwrap();
+        main.add_opcode(&mut vm, Opcode::Store, Some(&Arg::Int(0)))
+            .unwrap();
+        main.add_opcode(&mut vm, Opcode::Call, Some(&Arg::Text("f")))
+            .unwrap();
+        main.add_opcode(&mut vm, Opcode::Halt, None).unwrap();
+        main.add_finishing_opcode(&mut vm);
+
+        let mut f = Block::new("f", 0);
+        f.local_n = 1;
+        f.add_opcode(&mut vm, Opcode::Nil, None).unwrap();
+        f.add_opcode(&mut vm, Opcode::Num, Some(&Arg::Int(9)))
+            .unwrap();
+        f.add_opcode(&mut vm, Opcode::Store, Some(&Arg::Int(0)))
+            .unwrap();
+        f.add_opcode(&mut vm, Opcode::Ret, None).unwrap();
+        f.add_finishing_opcode(&mut vm);
+
+        vm.add_block(f);
+        vm.add_block(main);
+
+        let mut fiber = vm.new_fiber("main").unwrap();
+        let res = fiber.run();
+        assert_eq!(res, Ok(Value::nil()));
+
+        // the main function has 1 local so when that function halts there should again be 1 local
+        // as the locals from f should be popped off
+        assert_eq!(fiber.local_stack.len(), 1);
+    }
+
 }

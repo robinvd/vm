@@ -81,3 +81,10 @@ fn test_letorder() {
     assert_eq!(res, Ok(Value::nil()));
     assert_eq!(out, b"2\n");
 }
+
+#[test]
+fn test_access() {
+    let (out, res) = test_file("tests/basic/access.sabi");
+    assert_eq!(res, Ok(Value::nil()));
+    assert_eq!(out, b"2\n5\n");
+}
