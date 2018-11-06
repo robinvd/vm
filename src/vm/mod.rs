@@ -355,19 +355,27 @@ impl<'a, 'write> Fiber<'a, 'write> {
         Ok(())
     }
 
+    pub fn debug_run(&mut self) -> Result<Value, VMError> {
+        loop {
+            println!("stack: {:?}", self.value_stack);
+            println!("locals: {:?}", self.current_f().locals);
+            println!(
+                "code: {} {:04x}",
+                self.current_f().current_block.name,
+                self.current_f().code_ptr
+            );
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).unwrap();
+            match self.step() {
+                Ok(_) => continue,
+                Err(VMError::Halt) => return Ok(self.pop()?),
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     pub fn run(&mut self) -> Result<Value, VMError> {
         loop {
-            if self.base.debug {
-                println!("stack: {:?}", self.value_stack);
-                println!("locals: {:?}", self.current_f().locals);
-                println!(
-                    "code: {} {:04x}",
-                    self.current_f().current_block.name,
-                    self.current_f().code_ptr
-                );
-                let mut input = String::new();
-                io::stdin().read_line(&mut input).unwrap();
-            }
             match self.step() {
                 Ok(_) => continue,
                 Err(VMError::Halt) => return Ok(self.pop()?),

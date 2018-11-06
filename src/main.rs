@@ -78,7 +78,7 @@ fn main() {
     }
 
     let mut f = vm.new_fiber("start").expect("failed to make fiber");
-    let result = f.run();
+    let result = if vm.debug { f.debug_run() } else { f.run() };
 
     if matches.is_present("verbose") {
         println!("result: {:?}", result);
