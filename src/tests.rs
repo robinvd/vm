@@ -55,6 +55,13 @@ fn test_sqrt() {
 }
 
 #[test]
+fn test_fib() {
+    let (out, res) = test_file("tests/programs/fib.sabi");
+    assert_eq!(res, Ok(Value::nil()));
+    assert_eq!(out, b"10946\n");
+}
+
+#[test]
 fn test_function() {
     let (out, res) = test_file("tests/basic/function.sabi");
     assert_eq!(res, Ok(Value::nil()));

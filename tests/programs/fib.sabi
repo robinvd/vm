@@ -10,5 +10,7 @@ fn fib(x) {
 }
 
 fn main() {
-    print(fib(20))
+    let res = fib(20)
+
+    print(res)
 }

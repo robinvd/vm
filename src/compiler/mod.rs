@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 
-use crate::parser::bytecode::Arg;
-use crate::parser::code::{BcFunction, Expr, Function, TopLevel};
+use crate::parser::code::{Expr, Function, TopLevel};
 use crate::vm::{opcode::Opcode, Block, VMError, VM};
 
 #[derive(Debug)]
 struct Context<'a> {
-    names: HashMap<&'a str, usize>,
+    names: HashMap<&'a str, u16>,
     pub block: Block,
 }
 
@@ -18,19 +17,19 @@ impl<'a> Context<'a> {
         }
     }
 
-    pub fn insert_name(&mut self, name: &'a str) -> usize {
+    pub fn insert_name(&mut self, name: &'a str) -> u16 {
         let n = self.block.local_n;
-        self.names.insert(name, n);
+        self.names.insert(name, n as u16);
         self.block.local_n += 1;
 
-        n
+        n as u16
     }
 
     pub fn add_opcode(
         &mut self,
         vm: &mut VM,
         opcode: Opcode,
-        arg: Option<&Arg>,
+        arg: Option<u16>,
     ) -> Result<(), VMError> {
         self.block.add_opcode(vm, opcode, arg)
     }
@@ -42,41 +41,42 @@ impl<'a> Context<'a> {
                     self.compile_expr(vm, a)?;
                 }
 
-                self.add_opcode(vm, Opcode::Call, Some(&Arg::Text(n)))?;
+                let call_loc = vm.get_block_loc(n).expect("could not find function");
+                self.add_opcode(vm, Opcode::Call, Some(call_loc))?;
             }
             Expr::Lit(i) => {
                 let loc = self.block.constants.len();
                 self.block.constants.push(*i);
-                self.add_opcode(vm, Opcode::Const, Some(&Arg::Int(loc as isize)))?;
+                self.add_opcode(vm, Opcode::Const, Some(loc as u16))?;
             }
             Expr::While(p, body) => {
-                let while_label = self.block.fresh_label("while")?;
-                let done_label = self.block.reserve_fresh_label("done")?;
+                let while_label = self.block.add_label();
+                let done_label = self.block.reserve_label();
                 self.compile_expr(vm, p)?;
                 self.add_opcode(vm, Opcode::Not, None)?;
-                self.add_opcode(vm, Opcode::JmpT, Some(&Arg::Text(&done_label)))?;
+                self.add_opcode(vm, Opcode::JmpT, Some(done_label.0))?;
 
                 for a in body {
                     self.compile_expr(vm, &a)?;
                 }
 
-                self.add_opcode(vm, Opcode::Jmp, Some(&Arg::Text(&while_label)))?;
-                self.block.add_label(&done_label)?;
+                self.add_opcode(vm, Opcode::Jmp, Some(while_label.0))?;
+                self.block.place_label(done_label);
             }
             Expr::If(p, t, maybe_f) => {
-                let f_label = self.block.reserve_fresh_label("false")?;
-                let end_label = self.block.reserve_fresh_label("endif")?;
+                let f_label = self.block.reserve_label();
+                let end_label = self.block.reserve_label();
 
                 self.compile_expr(vm, p)?;
                 self.add_opcode(vm, Opcode::Not, None)?;
-                self.add_opcode(vm, Opcode::JmpT, Some(&Arg::Text(&f_label)))?;
+                self.add_opcode(vm, Opcode::JmpT, Some(f_label.0))?;
 
                 for a in t {
                     self.compile_expr(vm, &a)?;
                 }
 
-                self.add_opcode(vm, Opcode::Jmp, Some(&Arg::Text(&end_label)))?;
-                self.block.add_label(&f_label)?;
+                self.add_opcode(vm, Opcode::Jmp, Some(end_label.0))?;
+                self.block.place_label(f_label);
 
                 if let Some(f) = maybe_f {
                     for a in f {
@@ -84,7 +84,7 @@ impl<'a> Context<'a> {
                     }
                 }
 
-                self.block.add_label(&end_label)?;
+                self.block.place_label(end_label);
             }
             Expr::Let(names, exprs) => {
                 if names.len() != exprs.len() {
@@ -94,7 +94,7 @@ impl<'a> Context<'a> {
                 for (name, expr) in names.iter().zip(exprs.iter()) {
                     self.compile_expr(vm, expr)?;
                     let loc = self.insert_name(name);
-                    self.add_opcode(vm, Opcode::Store, Some(&Arg::Int(loc as isize)))?;
+                    self.add_opcode(vm, Opcode::Store, Some(loc))?;
                 }
             }
             Expr::Var(name) => {
@@ -102,7 +102,7 @@ impl<'a> Context<'a> {
                     .names
                     .get(name)
                     .ok_or_else(|| VMError::Msg("local var not found".to_owned()))?;
-                self.add_opcode(vm, Opcode::Load, Some(&Arg::Int(*loc as isize)))?;
+                self.add_opcode(vm, Opcode::Load, Some(*loc))?;
             }
             Expr::Assign(name, e) => {
                 let loc = *self
@@ -110,7 +110,7 @@ impl<'a> Context<'a> {
                     .get(name)
                     .ok_or_else(|| VMError::Msg("local assign not found".to_owned()))?;
                 self.compile_expr(vm, e)?;
-                self.add_opcode(vm, Opcode::Store, Some(&Arg::Int(loc as isize)))?;
+                self.add_opcode(vm, Opcode::Store, Some(loc))?;
             }
             Expr::Return(vals) => {
                 for v in vals.iter() {
@@ -135,13 +135,12 @@ impl<'a> Context<'a> {
 }
 
 pub fn compile_f(vm: &mut VM, f: &Function) -> Result<(), VMError> {
+    let block_loc = vm.reserve_block(f.name);
     let mut context = Context::new(f.name, f.args.len());
 
     for a in &f.args {
         let i = context.insert_name(&a);
-        context
-            .block
-            .add_opcode(vm, Opcode::Store, Some(&Arg::Int(i as isize)))?;
+        context.block.add_opcode(vm, Opcode::Store, Some(i))?;
     }
 
     for a in &f.body {
@@ -150,18 +149,8 @@ pub fn compile_f(vm: &mut VM, f: &Function) -> Result<(), VMError> {
     context.block.add_opcode(vm, Opcode::Nil, None)?;
     context.block.add_opcode(vm, Opcode::Ret, None)?;
 
-    vm.add_block(context.block);
+    vm.place_block(block_loc, context.block);
 
-    Ok(())
-}
-pub fn compile_bc_f(vm: &mut VM, f: &BcFunction) -> Result<(), VMError> {
-    let mut bl = Block::new(f.name.to_owned(), f.args.len());
-
-    for a in &f.body {
-        bl.parse_instr(vm, a)?;
-    }
-
-    vm.add_block(bl);
     Ok(())
 }
 
@@ -169,7 +158,6 @@ pub fn compile(vm: &mut VM, fs: &[TopLevel]) -> Result<(), VMError> {
     for f in fs.iter() {
         match f {
             TopLevel::Function(f) => compile_f(vm, f),
-            TopLevel::BcFunction(f) => compile_bc_f(vm, f),
             TopLevel::Use(_us) => unimplemented!(),
         }?;
     }

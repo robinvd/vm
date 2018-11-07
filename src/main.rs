@@ -62,7 +62,7 @@ fn main() {
         .unwrap();
 
     if matches.is_present("bytecode") {
-        vm.parse_ir_block("main", &input).unwrap();
+        panic!("not supported atm");
     } else {
         use combine::Parser;
         let i: &str = &input;

@@ -2,10 +2,6 @@ use std::collections::{HashMap, LinkedList};
 use std::sync::{Arc, Mutex};
 use std::{fmt, io};
 
-use crate::parser::bytecode::{self, Arg, Instr};
-
-use combine::Parser;
-
 pub mod opcode;
 pub mod value;
 
@@ -106,12 +102,12 @@ impl<'a> FState<'a> {
     }
 
     pub fn jump_to_label_index(&mut self, index: usize) -> Result<(), VMError> {
-        let label = &self.current_block.label_index[index];
-        let new_code_ptr = self.current_block.labels[label];
-        if new_code_ptr >= self.current_block.code.len() {
+        let new_code_ptr = self.current_block.label_index[index];
+
+        if new_code_ptr as usize >= self.current_block.code.len() {
             return Err(VMError::RuntimeError("jmp outside of code".to_owned()));
         }
-        self.code_ptr = new_code_ptr;
+        self.code_ptr = new_code_ptr as usize;
 
         Ok(())
     }
@@ -201,13 +197,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
     }
 
     pub fn push_frame(&mut self, f_index: usize) -> Result<(), VMError> {
-        let block_name = &self.base.fn_label_index[f_index];
-        let block_index = *self
-            .base
-            .fn_labels
-            .get(block_name)
-            .ok_or_else(|| VMError::FunctionNotFound(block_name.to_owned()))?;
-        let new_block = &self.base.blocks[block_index];
+        let new_block = &self.base.blocks[f_index];
         let f = FState::new(
             new_block,
             self.value_stack.len() - new_block.n_args,
@@ -405,9 +395,7 @@ pub struct Block {
     pub name: String,
     pub code: Vec<u8>,
 
-    pub labels: HashMap<String, usize>,
-    pub label_index: Vec<String>,
-    pub fresh_label: usize,
+    pub label_index: Vec<u16>,
 
     pub constants: Vec<Value>,
 
@@ -441,7 +429,6 @@ impl fmt::Debug for Block {
             writeln!(f);
             i += 1;
         }
-        writeln!(f, "labels {:?}", self.labels);
         writeln!(f, "labeli {:?}", self.label_index);
         writeln!(f, "const  {:?}", self.constants);
 
@@ -449,15 +436,15 @@ impl fmt::Debug for Block {
     }
 }
 
+pub struct Label(pub u16);
+
 impl Block {
     pub fn new(name: impl Into<String>, n_args: usize) -> Self {
         Self {
             name: name.into(),
             code: Vec::default(),
 
-            labels: Default::default(),
             label_index: Default::default(),
-            fresh_label: 0,
 
             constants: Default::default(),
 
@@ -468,9 +455,9 @@ impl Block {
 
     pub fn add_opcode(
         &mut self,
-        vm: &mut VM,
+        _vm: &mut VM,
         opcode: Opcode,
-        arg: Option<&Arg>,
+        arg: Option<u16>,
     ) -> Result<(), VMError> {
         if opcode.has_arg() != arg.is_some() {
             return Err(VMError::Msg("opcode/arg do not match".to_owned()));
@@ -484,22 +471,8 @@ impl Block {
 
         self.code.push(opcode as u8);
 
-        if let Some(ref a) = arg {
-            let num = match a {
-                Arg::Text(t) => match opcode {
-                    Opcode::Call => {
-                        let i = vm.fn_label_index.len();
-                        vm.fn_label_index.push((*t).to_owned());
-                        i
-                    }
-                    _ => {
-                        let i = self.label_index.len();
-                        self.label_index.push((*t).to_owned());
-                        i
-                    }
-                },
-                Arg::Int(i) => *i as usize,
-            };
+        if let Some(a) = arg {
+            let num = a;
             self.code.push((num >> 8) as u8);
             self.code.push(num as u8);
 
@@ -527,107 +500,35 @@ impl Block {
     /// Add a label to the current location
     /// a jump to this label jumps to the instruction
     /// after the label
-    pub fn add_label(&mut self, label: &str) -> Result<(), VMError> {
+    pub fn add_label(&mut self) -> Label {
         let opcode_index = self.code.len();
-        self.labels.insert(label.to_owned(), opcode_index);
+        let new_label_index = self.label_index.len();
+        self.label_index.push(opcode_index as u16);
 
-        Ok(())
+        Label(new_label_index as u16)
     }
 
     /// Reserve a label,
-    /// Like fresh_label, but dont add the label yet
-    /// This has to be done later by add_label
+    /// Like add_label, but dont add the label yet
+    /// This has to be done later by place_label
     ///
     /// This is useful when you want to jump to a label that will be defined later
-    pub fn reserve_fresh_label(&mut self, surgestion: &str) -> Result<String, VMError> {
-        let mut name = surgestion.to_owned();
-        while self.labels.contains_key(&name) {
-            name = format!("{}-{}", surgestion, self.fresh_label);
-            self.fresh_label += 1;
+    pub fn reserve_label(&mut self) -> Label {
+        let new_label_index = self.label_index.len();
+        self.label_index.push(1 << 15);
+
+        Label(new_label_index as u16)
+    }
+
+    pub fn place_label(&mut self, l: Label) {
+        if self.label_index[l.0 as usize] != 1 << 15 {
+            panic!("place_label: label already placed");
         }
 
-        Ok(name)
-    }
+        self.label_index[l.0 as usize] = self.code.len() as u16;
 
-    // Get a label that is not used before, and add it to the current location
-    pub fn fresh_label(&mut self, surgestion: &str) -> Result<String, VMError> {
-        let name = self.reserve_fresh_label(surgestion)?;
-        self.add_label(&name)?;
-
-        Ok(name)
-    }
-
-    pub fn parse_instr(&mut self, vm: &mut VM, instr: &Instr) -> Result<(), VMError> {
-        let opcode = match instr.instr {
-            "const" => Opcode::Const,
-            "copy" => Opcode::Copy,
-            "load" => Opcode::Load,
-            "store" => Opcode::Store,
-            "pop" => Opcode::Pop,
-            "halt" => Opcode::Halt,
-            "print" => Opcode::Print,
-            "call" => Opcode::Call,
-            "ret" => Opcode::Ret,
-            "add" => Opcode::Add,
-            "mul" => Opcode::Mul,
-            "div" => Opcode::Div,
-            "neg" => Opcode::Neg,
-            "not" => Opcode::Not,
-            "leq" => Opcode::LEQ,
-            "jmp" => Opcode::Jmp,
-            "jmpt" => Opcode::JmpT,
-            "nop" => Opcode::Nop,
-            x => return Err(VMError::ParseErr(format!("err invalid instr: {:?}", x))),
-        };
-
-        if let Some(ref x) = instr.label {
-            self.add_label(x)?;
-        }
-        self.add_opcode(vm, opcode, instr.arg.as_ref())?;
-
-        Ok(())
-    }
-
-    pub fn parse_opcode_data(&mut self, data: &str) -> Result<(), VMError> {
-        self.add_data(Value::number(data.parse().unwrap()));
-        Ok(())
-    }
-
-    pub fn parse_ir(&mut self, vm: &mut VM, input: &str) -> Result<(), VMError> {
-        #[derive(Debug)]
-        enum Mode {
-            Code,
-            Data,
-            Comment,
-        };
-        let mut mode = Mode::Code;
-        for x in input.lines() {
-            match x.trim() {
-                ".code" => mode = Mode::Code,
-                ".data" => mode = Mode::Data,
-                ".comment" => mode = Mode::Comment,
-                x => match mode {
-                    Mode::Code => {
-                        if x.is_empty() {
-                            continue;
-                        }
-                        let (res, extra) = bytecode::parse_instr()
-                            .easy_parse(x)
-                            .map_err(|e| VMError::CombineErr(format!("{:?}", e)))?;
-
-                        if !extra.is_empty() {
-                            return Err(VMError::ParseErr("trailing char".to_owned()));
-                        }
-
-                        self.parse_instr(vm, &res)?
-                    }
-                    Mode::Data => self.parse_opcode_data(x)?,
-                    Mode::Comment => {}
-                },
-            }
-        }
-
-        Ok(())
+        // explicitly drop the label for clippy lints
+        drop(l)
     }
 }
 
@@ -641,7 +542,6 @@ impl<'a> fmt::Debug for VM<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // writeln!(f, "code:");
         writeln!(f, "{:?}", self.fn_labels)?;
-        writeln!(f, "{:?}", self.fn_label_index)?;
 
         for b in &self.blocks {
             writeln!(f, "{:?}", b)?;
@@ -653,11 +553,9 @@ impl<'a> fmt::Debug for VM<'a> {
 
 pub struct VM<'write> {
     blocks: Vec<Block>,
-    fn_labels: HashMap<String, usize>,
-    fn_label_index: Vec<String>,
+    fn_labels: HashMap<String, u16>,
 
     fn_foreign: Vec<fn(&mut Fiber)>,
-    fn_foreign_labels: HashMap<String, usize>,
 
     output: Arc<Mutex<Box<io::Write + 'write>>>,
 
@@ -670,9 +568,7 @@ impl<'a> VM<'a> {
             blocks: Vec::default(),
 
             fn_labels: HashMap::new(),
-            fn_label_index: Vec::new(),
             fn_foreign: Vec::new(),
-            fn_foreign_labels: HashMap::new(),
 
             output: Arc::new(Mutex::new(output)),
 
@@ -682,32 +578,55 @@ impl<'a> VM<'a> {
 
     pub fn new_fiber<'b>(&'b self, label: &str) -> Result<Fiber<'b, 'a>, VMError> {
         // todo hangle args
-        let fs = FState::new(&self.blocks[self.fn_labels[label]], 0, 0);
+        let fs = FState::new(&self.blocks[self.fn_labels[label] as usize], 0, 0);
         let fiber = Fiber::new(self, fs);
 
         Ok(fiber)
     }
 
-    pub fn add_block(&mut self, mut block: Block) {
-        block.add_finishing_opcode(self);
-
-        unsafe { self.add_block_unchecked(block) };
+    pub fn get_block_loc(&self, n: &str) -> Option<u16> {
+        self.fn_labels.get(n).cloned()
     }
 
-    pub unsafe fn add_block_unchecked(&mut self, block: Block) {
+    pub fn add_block(&mut self, mut block: Block) -> u16 {
+        block.add_finishing_opcode(self);
+
+        unsafe { self.add_block_unchecked(block) }
+    }
+
+    pub fn reserve_block(&mut self, n: &str) -> u16 {
+        let pos = self.blocks.len();
+        self.blocks.push(Block::new(n, 0));
+        self.fn_labels.insert(n.to_owned(), pos as u16);
+
+        pos as u16
+    }
+
+    pub fn place_block(&mut self, index: u16, mut block: Block) {
+        block.add_finishing_opcode(self);
+        self.blocks[index as usize] = block;
+    }
+
+    pub unsafe fn add_block_unchecked(&mut self, block: Block) -> u16 {
         let pos = self.blocks.len();
         let name = block.name.clone();
         self.blocks.push(block);
-        self.fn_labels.insert(name, pos);
+        self.fn_labels.insert(name, pos as u16);
+        pos as u16
     }
 
     pub fn add_start(&mut self) {
         let mut block = Block::new("start", 0);
         block
-            .add_opcode(self, Opcode::Num, Some(&Arg::Int(0)))
+            .add_opcode(self, Opcode::Num, Some(0))
             .expect("internal error");
+
+        let main_loc = *self
+            .fn_labels
+            .get("main")
+            .expect("could not find 'main' function");
         block
-            .add_opcode(self, Opcode::Call, Some(&Arg::Text("main")))
+            .add_opcode(self, Opcode::Call, Some(main_loc as u16))
             .expect("internal error");
         block
             .add_opcode(self, Opcode::Halt, None)
@@ -716,23 +635,13 @@ impl<'a> VM<'a> {
         self.add_block(block);
     }
 
-    pub fn parse_ir_block(&mut self, name: impl Into<String>, input: &str) -> Result<(), VMError> {
-        // todo hangle args
-        let mut bl = Block::new(name.into(), 0);
-
-        bl.parse_ir(self, input)?;
-        self.add_block(bl);
-
-        Ok(())
-    }
-
     pub fn register_foreign(&mut self, name: &str, f: fn(&mut Fiber), n_args: usize) {
         let index = self.fn_foreign.len();
         self.fn_foreign.push(f);
-        self.fn_foreign_labels.insert(name.to_owned(), index);
+        // self.fn_foreign_labels.insert(name.to_owned(), index);
 
         let mut bl = Block::new(name, n_args);
-        bl.add_opcode(self, Opcode::CallForeign, Some(&Arg::Int(index as isize)))
+        bl.add_opcode(self, Opcode::CallForeign, Some(index as u16))
             .unwrap();
         bl.add_opcode(self, Opcode::Ret, None).unwrap();
         unsafe { self.add_block_unchecked(bl) };
@@ -825,11 +734,13 @@ mod tests {
     }
 
     fn load_vm<'a>(input: &'a str, buffer: &'a mut Vec<u8>) -> VM<'a> {
+        use combine::Parser;
         use crate::compiler;
         use crate::parser;
 
         let mut vm = VM::new(Box::new(buffer));
         vm.register_basic();
+        vm.register_internal();
 
         let parsed = parser::code::parse_file()
             .easy_parse(input)
@@ -845,30 +756,27 @@ mod tests {
     fn test_gc() {
         let input = load_file("tests/basic/gc.sabi").unwrap();
         let mut buffer = Vec::new();
-        let mut vm = load_vm(&input, &mut buffer);
-        vm.register_internal();
+        let vm = load_vm(&input, &mut buffer);
 
         let mut f = vm.new_fiber("start").unwrap();
         let res = f.run();
         assert_eq!(res, Ok(Value::True));
     }
 
-    fn test_instr(instr: Opcode, arg: Option<Arg>, vals: &[Value], result: Value) {
+    fn test_instr(instr: Opcode, arg: Option<u16>, vals: &[Value], result: Value) {
         let buffer = Vec::new();
         let mut vm = VM::new(Box::new(buffer));
         let mut block = Block::new("test", 0);
         vals.iter().for_each(|x| {
             let i = block.add_data(*x);
             block
-                .add_opcode(&mut vm, Opcode::Const, Some(&Arg::Int(i as isize)))
+                .add_opcode(&mut vm, Opcode::Const, Some(i as u16))
                 .unwrap();
-            block
-                .add_opcode(&mut vm, Opcode::Copy, Some(&Arg::Int(0)))
-                .unwrap();
+            block.add_opcode(&mut vm, Opcode::Copy, Some(0)).unwrap();
             block.add_opcode(&mut vm, Opcode::Print, None).unwrap();
         });
 
-        block.add_opcode(&mut vm, instr, arg.as_ref()).unwrap();
+        block.add_opcode(&mut vm, instr, arg).unwrap();
         block.add_opcode(&mut vm, Halt, None).unwrap();
         block.add_finishing_opcode(&mut vm);
 
@@ -881,12 +789,7 @@ mod tests {
 
     #[test]
     fn test_copy() {
-        test_instr(
-            Copy,
-            Some(Arg::Int(0)),
-            &[Value::number(10.)],
-            Value::number(10.),
-        );
+        test_instr(Copy, Some(0), &[Value::number(10.)], Value::number(10.));
     }
     #[test]
     fn test_not() {
@@ -953,18 +856,17 @@ mod tests {
         let buffer = Vec::new();
         let mut vm = VM::new(Box::new(buffer));
 
-        let mut main = Block::new("main", 0);
-        main.add_opcode(&mut vm, Num, Some(&Arg::Int(21))).unwrap();
-        main.add_opcode(&mut vm, Call, Some(&Arg::Text("wrong")))
-            .unwrap();
-        main.add_opcode(&mut vm, Ret, None).unwrap();
-
         let mut wrong = Block::new("wrong", 0);
         wrong.add_opcode(&mut vm, Pop, None).unwrap();
         wrong.add_opcode(&mut vm, Ret, None).unwrap();
+        let wrong_loc = vm.add_block(wrong);
+
+        let mut main = Block::new("main", 0);
+        main.add_opcode(&mut vm, Num, Some(21)).unwrap();
+        main.add_opcode(&mut vm, Call, Some(wrong_loc)).unwrap();
+        main.add_opcode(&mut vm, Ret, None).unwrap();
 
         vm.add_block(main);
-        vm.add_block(wrong);
 
         let res = vm.new_fiber("main").unwrap().run();
 
@@ -976,28 +878,24 @@ mod tests {
         let buffer = Vec::new();
         let mut vm = VM::new(Box::new(buffer));
 
-        let mut main = Block::new("main", 0);
-        main.local_n = 1;
-        main.add_opcode(&mut vm, Opcode::Num, Some(&Arg::Int(5)))
-            .unwrap();
-        main.add_opcode(&mut vm, Opcode::Store, Some(&Arg::Int(0)))
-            .unwrap();
-        main.add_opcode(&mut vm, Opcode::Call, Some(&Arg::Text("f")))
-            .unwrap();
-        main.add_opcode(&mut vm, Opcode::Halt, None).unwrap();
-        main.add_finishing_opcode(&mut vm);
-
         let mut f = Block::new("f", 0);
         f.local_n = 1;
         f.add_opcode(&mut vm, Opcode::Nil, None).unwrap();
-        f.add_opcode(&mut vm, Opcode::Num, Some(&Arg::Int(9)))
-            .unwrap();
-        f.add_opcode(&mut vm, Opcode::Store, Some(&Arg::Int(0)))
-            .unwrap();
+        f.add_opcode(&mut vm, Opcode::Num, Some(9)).unwrap();
+        f.add_opcode(&mut vm, Opcode::Store, Some(0)).unwrap();
         f.add_opcode(&mut vm, Opcode::Ret, None).unwrap();
         f.add_finishing_opcode(&mut vm);
 
-        vm.add_block(f);
+        let f_loc = vm.add_block(f);
+
+        let mut main = Block::new("main", 0);
+        main.local_n = 1;
+        main.add_opcode(&mut vm, Opcode::Num, Some(5)).unwrap();
+        main.add_opcode(&mut vm, Opcode::Store, Some(0)).unwrap();
+        main.add_opcode(&mut vm, Opcode::Call, Some(f_loc)).unwrap();
+        main.add_opcode(&mut vm, Opcode::Halt, None).unwrap();
+        main.add_finishing_opcode(&mut vm);
+
         vm.add_block(main);
 
         let mut fiber = vm.new_fiber("main").unwrap();

@@ -19,16 +19,8 @@ pub struct Function<'a> {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct BcFunction<'a> {
-    pub name: &'a str,
-    pub args: Vec<&'a str>,
-    pub body: Vec<bytecode::Instr<'a>>,
-}
-
-#[derive(Debug, PartialEq)]
 pub enum TopLevel<'a> {
     Function(Function<'a>),
-    BcFunction(BcFunction<'a>),
     // Use(UseTree<'a>),
     Use(Vec<&'a str>),
 }
@@ -74,7 +66,7 @@ parser!{
         I::Error: ParseError<I::Item, I::Range, I::Position>,
     ]
     {
-        take_while1(|c: char| is_num(c))
+        take_while1(|c: char| c.is_numeric())
             .skip(skip_whitespace())
             .map(|s: &str| s.parse::<isize>().unwrap())
     }
@@ -89,10 +81,10 @@ parser!{
     {
         recognize((
             optional(string("-")),
-            take_while1(|c: char| is_num(c)),
+            take_while1(|c: char| c.is_numeric()),
             optional((
                 string("."),
-                take_while1(|c: char| is_num(c)),
+                take_while1(|c: char| c.is_numeric()),
             ))
         ))
             .skip(skip_whitespace())
@@ -243,20 +235,6 @@ where
     .map(|x| TopLevel::Function(x))
 }
 
-pub fn bc_function<'a, I>() -> impl Parser<Input = I, Output = TopLevel<'a>>
-where
-    I: RangeStream<Item = char, Range = &'a str>,
-    I::Error: ParseError<I::Item, I::Range, I::Position>,
-{
-    struct_parser!(BcFunction {
-        _: text("bc"),
-        name: ident(),
-        args: between(text("("), text(")"), sep_by(ident(), text(","))),
-        body: between(text("{"), text("}"), many(attempt(bytecode::parse_instr()))),
-    })
-    .map(TopLevel::BcFunction)
-}
-
 pub fn parse_file<'a, I>() -> impl Parser<Input = I, Output = Vec<TopLevel<'a>>>
 where
     I: RangeStream<Item = char, Range = &'a str>,
@@ -265,7 +243,7 @@ where
     between(
         skip_whitespace(),
         eof(),
-        many(choice((function(), bc_function(), use_parse()))),
+        many(choice((function(), use_parse()))),
     )
 }
 
@@ -341,22 +319,6 @@ mod tests {
                         Expr::Call("print", vec![Expr::Var("a")]),
                         Expr::Call("print", vec![Expr::Var("b")])
                     ]
-                })],
-                ""
-            )),
-        );
-    }
-
-    #[test]
-    fn bc_function_test() {
-        let result = parse_file().easy_parse("bc test(a, b) {add\n}");
-        assert_eq!(
-            result,
-            Ok((
-                vec![TopLevel::BcFunction(BcFunction {
-                    name: "test",
-                    args: vec!["a", "b"],
-                    body: vec![bytecode::Instr::new(None, "add", None)]
                 })],
                 ""
             )),
