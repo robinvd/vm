@@ -38,6 +38,7 @@ pub enum VMError {
 pub struct Fiber<'a, 'write> {
     base: &'a VM<'write>,
     f: Vec<FState<'a>>,
+    current_f: FState<'a>,
     value_stack: Vec<Value>,
     local_stack: Vec<Value>,
     all_gc: LinkedList<GCObject>,
@@ -50,6 +51,7 @@ pub struct Fiber<'a, 'write> {
 /// The struct only contains 'stack' values
 /// so that no allocations have to happen by creating a new stack frame
 /// (except for growing both stacks)
+#[derive(Clone, Debug)]
 pub struct FState<'a> {
     current_block: &'a Block,
     code_ptr: usize,
@@ -130,7 +132,8 @@ impl<'a, 'write> Fiber<'a, 'write> {
         let local_n = f.current_block.local_n;
         Self {
             base,
-            f: vec![f],
+            f: Vec::new(),
+            current_f: f,
             value_stack: Vec::default(),
             local_stack: vec![Value::nil(); local_n],
             all_gc: LinkedList::new(),
@@ -191,14 +194,10 @@ impl<'a, 'write> Fiber<'a, 'write> {
     }
 
     pub fn pop(&mut self) -> Result<Value, VMError> {
-        if self.value_stack.len() <= self.current_f().stack_start {
+        if self.value_stack.len() <= self.current_f.stack_start {
             return Err(VMError::EmptyPop);
         }
         self.value_stack.pop().ok_or(VMError::EmptyPop)
-    }
-
-    pub fn current_f(&mut self) -> &mut FState<'a> {
-        self.f.last_mut().expect("empty fiber")
     }
 
     pub fn push_frame(&mut self, f_index: usize) -> Result<(), VMError> {
@@ -219,13 +218,14 @@ impl<'a, 'write> Fiber<'a, 'write> {
         self.local_stack
             .resize(old_len + new_block.local_n, Value::nil());
 
-        self.f.push(f);
+        self.f.push(self.current_f.clone());
+        self.current_f = f;
 
         Ok(())
     }
 
     pub fn pop_frame(&mut self) {
-        let old = self.f.pop().unwrap();
+        let old = &self.current_f;
         let ret_val = if old.stack_start < self.value_stack.len() {
             *self.value_stack.last().unwrap()
         } else {
@@ -234,18 +234,17 @@ impl<'a, 'write> Fiber<'a, 'write> {
         self.value_stack.truncate(old.stack_start);
         self.local_stack.truncate(old.local_stack_start);
         self.value_stack.push(ret_val);
+
+        self.current_f = self.f.pop().unwrap();
     }
 
     pub fn step(&mut self) -> Result<(), VMError> {
-        let instr = self.current_f().advance_opcode();
-        if self.base.debug {
-            println!("{:?} {:?}", instr, self.value_stack);
-        }
+        let instr = self.current_f.advance_opcode();
         match instr {
             Opcode::Halt => return Err(VMError::Halt),
             Opcode::Const => {
-                let x = self.current_f().advance_u16() as usize;
-                let c = self.current_f().current_block.constants[x];
+                let x = self.current_f.advance_u16() as usize;
+                let c = self.current_f.current_block.constants[x];
                 let new = self.deep_clone(c);
                 self.push(new);
             }
@@ -253,7 +252,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 self.push(Value::Nil);
             }
             Opcode::Num => {
-                let x = self.current_f().advance_u16() as f64;
+                let x = self.current_f.advance_u16() as f64;
                 self.push(Value::number(x));
             }
             Opcode::True => {
@@ -263,28 +262,28 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 self.push(Value::False);
             }
             Opcode::Copy => {
-                let x = self.current_f().advance_u16() as usize;
+                let x = self.current_f.advance_u16() as usize;
                 self.push(self.value_stack[self.value_stack.len() - 1 - x]);
             }
             Opcode::Load => {
-                let x = self.current_f().advance_u16() as usize;
+                let x = self.current_f.advance_u16() as usize;
                 // let val = self.current_f().locals[x];
-                let start = self.current_f().local_stack_start;
+                let start = self.current_f.local_stack_start;
                 let val = self.local_stack[start + x];
                 self.push(val);
             }
             Opcode::Store => {
-                let x = self.current_f().advance_u16() as usize;
+                let x = self.current_f.advance_u16() as usize;
                 // self.current_f().locals[x] = self.pop()?;
-                let start = self.current_f().local_stack_start;
+                let start = self.current_f.local_stack_start;
                 self.local_stack[start + x] = self.pop()?;
             }
             Opcode::Call => {
-                let x = self.current_f().advance_u16();
+                let x = self.current_f.advance_u16();
                 self.push_frame(x as usize)?;
             }
             Opcode::CallForeign => {
-                let f_index = self.current_f().advance_u16();
+                let f_index = self.current_f.advance_u16();
                 self.base.fn_foreign[f_index as usize](self);
             }
             Opcode::Ret => self.pop_frame(),
@@ -346,14 +345,14 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 })?);
             }
             Opcode::Jmp => {
-                let x = self.current_f().advance_u16();
-                self.current_f().jump_to_label_index(x as usize)?;
+                let x = self.current_f.advance_u16();
+                self.current_f.jump_to_label_index(x as usize)?;
             }
             Opcode::JmpT => {
-                let label_index = self.current_f().advance_u16();
+                let label_index = self.current_f.advance_u16();
                 let cond = self.pop()?;
                 if cond.is_true() {
-                    self.current_f().jump_to_label_index(label_index as usize)?;
+                    self.current_f.jump_to_label_index(label_index as usize)?;
                 }
             }
             Opcode::New => {}
@@ -379,8 +378,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
             println!("locals: {:?}", self.local_stack);
             println!(
                 "code: {} {:04x}",
-                self.current_f().current_block.name,
-                self.current_f().code_ptr
+                self.current_f.current_block.name, self.current_f.code_ptr
             );
             let mut input = String::new();
             io::stdin().read_line(&mut input).unwrap();
