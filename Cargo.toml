@@ -29,3 +29,6 @@ criterion = "0.2"
 [[bench]]
 name = "benchmark"
 harness = false
+
+[profile.release]
+panic = 'abort'
