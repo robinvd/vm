@@ -88,6 +88,7 @@ parser!{
     ]
     {
         recognize((
+            optional(string("-")),
             take_while1(|c: char| is_num(c)),
             optional((
                 string("."),
