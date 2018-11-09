@@ -45,8 +45,7 @@ impl<'a> Context<'a> {
                 self.add_opcode(vm, Opcode::Call, Some(call_loc))?;
             }
             Expr::Lit(i) => {
-                let loc = self.block.constants.len();
-                self.block.constants.push(*i);
+                let loc = self.block.add_data(*i);
                 self.add_opcode(vm, Opcode::Const, Some(loc as u16))?;
             }
             Expr::While(p, body) => {
