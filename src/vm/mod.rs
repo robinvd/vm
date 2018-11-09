@@ -65,7 +65,7 @@ impl<'a> FState<'a> {
     ///
     /// This is always the case in a valid block
     /// This function assumes it is given a valid block
-    pub fn new(current_block: &'a Block, stack_start: usize, local_stack_start: usize) -> Self {
+    fn new(current_block: &'a Block, stack_start: usize, local_stack_start: usize) -> Self {
         Self {
             current_block,
             code_ptr: 0,
@@ -80,7 +80,7 @@ impl<'a> FState<'a> {
     /// And (TODO) we check that a module always ends with a halt/ret instruction
     ///
     /// The unchecked conversion into an opcode should be safe as it is al internal
-    pub fn advance_opcode(&mut self) -> Opcode {
+    fn advance_opcode(&mut self) -> Opcode {
         unsafe {
             let op = *self.current_block.code.get_unchecked(self.code_ptr);
             self.code_ptr += 1;
@@ -91,7 +91,7 @@ impl<'a> FState<'a> {
     /// Get a u16 literal from the code buffer
     ///
     /// See advance_opcode and new for safety explanation
-    pub fn advance_u16(&mut self) -> u16 {
+    fn advance_u16(&mut self) -> u16 {
         let num = unsafe {
             (*self.current_block.code.get_unchecked(self.code_ptr) as u16) << 8
                 | *self.current_block.code.get_unchecked(self.code_ptr + 1) as u16
@@ -101,7 +101,7 @@ impl<'a> FState<'a> {
         num
     }
 
-    pub fn jump_to_label_index(&mut self, index: usize) -> Result<(), VMError> {
+    fn jump_to_label_index(&mut self, index: usize) -> Result<(), VMError> {
         let new_code_ptr = self.current_block.label_index[index];
 
         if new_code_ptr as usize >= self.current_block.code.len() {
@@ -124,7 +124,7 @@ impl<'a, 'write> Drop for Fiber<'a, 'write> {
 }
 
 impl<'a, 'write> Fiber<'a, 'write> {
-    pub fn new(base: &'a VM<'write>, f: FState<'a>) -> Self {
+    fn new(base: &'a VM<'write>, f: FState<'a>) -> Self {
         let local_n = f.current_block.local_n;
         Self {
             base,
@@ -136,7 +136,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
         }
     }
 
-    pub fn deep_clone(&mut self, val: Value) -> Value {
+    fn deep_clone(&mut self, val: Value) -> Value {
         let new = val.deep_clone();
 
         let mut f = |val: &Value| {
@@ -214,7 +214,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
         Ok(())
     }
 
-    pub fn pop_frame(&mut self) {
+    fn pop_frame(&mut self) {
         let old = &self.current_f;
         let ret_val = if old.stack_start < self.value_stack.len() {
             *self.value_stack.last().unwrap()
@@ -228,7 +228,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
         self.current_f = self.f.pop().unwrap();
     }
 
-    pub fn step(&mut self) -> Result<(), VMError> {
+    fn step(&mut self) -> Result<(), VMError> {
         let instr = self.current_f.advance_opcode();
         match instr {
             Opcode::Halt => return Err(VMError::Halt),
@@ -358,10 +358,6 @@ impl<'a, 'write> Fiber<'a, 'write> {
         Ok(())
     }
 
-    pub fn trace(&mut self) -> Result<(), VMError> {
-        Ok(())
-    }
-
     pub fn debug_run(&mut self) -> Result<Value, VMError> {
         loop {
             println!("stack: {:?}", self.value_stack);
@@ -392,12 +388,12 @@ impl<'a, 'write> Fiber<'a, 'write> {
 }
 
 pub struct Block {
-    pub name: String,
-    pub code: Vec<u8>,
+    name: String,
+    code: Vec<u8>,
 
-    pub label_index: Vec<u16>,
+    label_index: Vec<u16>,
 
-    pub constants: Vec<Value>,
+    constants: Vec<Value>,
 
     pub n_args: usize,
     pub local_n: usize,
@@ -484,7 +480,8 @@ impl Block {
         Ok(())
     }
 
-    pub fn add_finishing_opcode(&mut self, vm: &mut VM) {
+    /// Finish this block
+    pub fn finish(&mut self, vm: &mut VM) {
         self.add_opcode(vm, Opcode::End, None)
             .expect("internal error");
         self.add_opcode(vm, Opcode::End, None)
@@ -589,7 +586,7 @@ impl<'a> VM<'a> {
     }
 
     pub fn add_block(&mut self, mut block: Block) -> u16 {
-        block.add_finishing_opcode(self);
+        block.finish(self);
 
         unsafe { self.add_block_unchecked(block) }
     }
@@ -603,7 +600,7 @@ impl<'a> VM<'a> {
     }
 
     pub fn place_block(&mut self, index: u16, mut block: Block) {
-        block.add_finishing_opcode(self);
+        block.finish(self);
         self.blocks[index as usize] = block;
     }
 
@@ -778,7 +775,7 @@ mod tests {
 
         block.add_opcode(&mut vm, instr, arg).unwrap();
         block.add_opcode(&mut vm, Halt, None).unwrap();
-        block.add_finishing_opcode(&mut vm);
+        block.finish(&mut vm);
 
         vm.add_block(block);
         println!("{:?}", vm);
@@ -884,7 +881,7 @@ mod tests {
         f.add_opcode(&mut vm, Opcode::Num, Some(9)).unwrap();
         f.add_opcode(&mut vm, Opcode::Store, Some(0)).unwrap();
         f.add_opcode(&mut vm, Opcode::Ret, None).unwrap();
-        f.add_finishing_opcode(&mut vm);
+        f.finish(&mut vm);
 
         let f_loc = vm.add_block(f);
 
@@ -894,7 +891,7 @@ mod tests {
         main.add_opcode(&mut vm, Opcode::Store, Some(0)).unwrap();
         main.add_opcode(&mut vm, Opcode::Call, Some(f_loc)).unwrap();
         main.add_opcode(&mut vm, Opcode::Halt, None).unwrap();
-        main.add_finishing_opcode(&mut vm);
+        main.finish(&mut vm);
 
         vm.add_block(main);
 
