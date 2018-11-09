@@ -111,6 +111,10 @@ impl<'a> FState<'a> {
 
         Ok(())
     }
+
+    fn jump_to_addr(&mut self, index: usize) {
+        self.code_ptr = index;
+    }
 }
 
 impl<'a, 'write> Drop for Fiber<'a, 'write> {
@@ -334,6 +338,17 @@ impl<'a, 'write> Fiber<'a, 'write> {
                     }
                 })?);
             }
+            Opcode::JmpDirect => {
+                let x = self.current_f.advance_u16();
+                self.current_f.jump_to_addr(x as usize);
+            }
+            Opcode::JmpTDirect => {
+                let label_index = self.current_f.advance_u16();
+                let cond = self.pop()?;
+                if cond.is_true() {
+                    self.current_f.jump_to_addr(label_index as usize);
+                }
+            }
             Opcode::Jmp => {
                 let x = self.current_f.advance_u16();
                 self.current_f.jump_to_label_index(x as usize)?;
@@ -434,6 +449,46 @@ impl fmt::Debug for Block {
 
 pub struct Label(pub u16);
 
+struct CodeTraverse {
+    code_ptr: usize,
+    last_opcode: usize,
+}
+
+impl CodeTraverse {
+    fn new() -> Self {
+        Self {
+            code_ptr: 0,
+            last_opcode: 0,
+        }
+    }
+
+    fn advance_opcode(&mut self, block: &Block) -> Opcode {
+        let op = block.code[self.code_ptr];
+        self.last_opcode = self.code_ptr;
+        self.code_ptr += 1;
+        Opcode::from_u8(op).expect("internal error")
+    }
+
+    fn advance_u16(&mut self, block: &Block) -> u16 {
+        let num = (block.code[self.code_ptr] as u16) << 8 | block.code[self.code_ptr + 1] as u16;
+        self.code_ptr += 2;
+
+        num
+    }
+
+    fn set_last_opcode(&mut self, block: &mut Block, op: Opcode) {
+        block.code[self.last_opcode] = op as u8;
+    }
+
+    fn set_last_arg(&mut self, block: &mut Block, arg: u16) {
+        if self.code_ptr == self.last_opcode {
+            panic!("current addr is not an argument");
+        }
+        block.code[self.code_ptr - 2] = (arg >> 8) as u8;
+        block.code[self.code_ptr - 1] = arg as u8;
+    }
+}
+
 impl Block {
     pub fn new(name: impl Into<String>, n_args: usize) -> Self {
         Self {
@@ -449,7 +504,7 @@ impl Block {
         }
     }
 
-    pub fn add_opcode(
+    pub(crate) fn add_opcode(
         &mut self,
         _vm: &mut VM,
         opcode: Opcode,
@@ -481,11 +536,36 @@ impl Block {
     }
 
     /// Finish this block
-    pub fn finish(&mut self, vm: &mut VM) {
+    fn finish(&mut self, vm: &mut VM) {
         self.add_opcode(vm, Opcode::End, None)
             .expect("internal error");
         self.add_opcode(vm, Opcode::End, None)
             .expect("internal error");
+
+        let mut f = CodeTraverse::new();
+
+        loop {
+            let op = f.advance_opcode(self);
+            match op {
+                Opcode::End => break,
+                Opcode::Jmp => {
+                    let label_index = f.advance_u16(self);
+                    let absolute_addr = self.label_index[label_index as usize];
+                    f.set_last_opcode(self, Opcode::JmpDirect);
+                    f.set_last_arg(self, absolute_addr);
+                }
+                Opcode::JmpT => {
+                    let label_index = f.advance_u16(self);
+                    let absolute_addr = self.label_index[label_index as usize];
+                    f.set_last_opcode(self, Opcode::JmpTDirect);
+                    f.set_last_arg(self, absolute_addr);
+                }
+                op if op.has_arg() => {
+                    f.advance_u16(self);
+                }
+                _ => continue,
+            };
+        }
     }
 
     pub fn add_data(&mut self, data: Value) -> usize {
@@ -588,7 +668,11 @@ impl<'a> VM<'a> {
     pub fn add_block(&mut self, mut block: Block) -> u16 {
         block.finish(self);
 
-        unsafe { self.add_block_unchecked(block) }
+        let pos = self.blocks.len();
+        let name = block.name.clone();
+        self.blocks.push(block);
+        self.fn_labels.insert(name, pos as u16);
+        pos as u16
     }
 
     pub fn reserve_block(&mut self, n: &str) -> u16 {
@@ -602,14 +686,6 @@ impl<'a> VM<'a> {
     pub fn place_block(&mut self, index: u16, mut block: Block) {
         block.finish(self);
         self.blocks[index as usize] = block;
-    }
-
-    pub unsafe fn add_block_unchecked(&mut self, block: Block) -> u16 {
-        let pos = self.blocks.len();
-        let name = block.name.clone();
-        self.blocks.push(block);
-        self.fn_labels.insert(name, pos as u16);
-        pos as u16
     }
 
     pub fn add_start(&mut self) {
@@ -641,7 +717,7 @@ impl<'a> VM<'a> {
         bl.add_opcode(self, Opcode::CallForeign, Some(index as u16))
             .unwrap();
         bl.add_opcode(self, Opcode::Ret, None).unwrap();
-        unsafe { self.add_block_unchecked(bl) };
+        self.add_block(bl);
     }
 
     pub fn register_io(&mut self) {
@@ -664,7 +740,7 @@ impl<'a> VM<'a> {
             ops.iter()
                 .for_each(|op| bl.add_opcode(vm, *op, None).unwrap());
             bl.add_opcode(vm, Opcode::Ret, None).unwrap();
-            unsafe { vm.add_block_unchecked(bl) };
+            vm.add_block(bl);
         }
 
         fn vm_floor(fiber: &mut Fiber) {

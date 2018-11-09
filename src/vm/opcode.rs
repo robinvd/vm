@@ -1,8 +1,9 @@
 use std::mem;
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u8)]
-pub enum Opcode {
+pub(crate) enum Opcode {
     // general
     Halt,
     Pop,
@@ -37,6 +38,8 @@ pub enum Opcode {
     // jmp
     JmpT,
     Jmp,
+    JmpTDirect,
+    JmpDirect,
 
     // objects
     New,
@@ -66,7 +69,9 @@ impl Opcode {
         match self {
             Opcode::Const
             | Opcode::Jmp
+            | Opcode::JmpDirect
             | Opcode::JmpT
+            | Opcode::JmpTDirect
             | Opcode::Load
             | Opcode::Store
             | Opcode::Call
