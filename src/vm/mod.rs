@@ -514,22 +514,12 @@ impl Block {
             return Err(VMError::Msg("opcode/arg do not match".to_owned()));
         }
 
-        // if opcode.has_arg() {
-        //     while self.code.len() % 4 != 3 {
-        //         self.code.push(Opcode::Nop as u8)
-        //     }
-        // }
-
         self.code.push(opcode as u8);
 
         if let Some(a) = arg {
             let num = a;
             self.code.push((num >> 8) as u8);
             self.code.push(num as u8);
-
-            // if self.debug {
-            //     println!("conversion {} -> {:?}", num, raw_bytes);
-            // }
         };
 
         Ok(())
