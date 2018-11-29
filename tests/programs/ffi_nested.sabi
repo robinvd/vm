@@ -1,0 +1,23 @@
+fn g(i) {
+    let ret = 2
+    if leq(9, i) {
+        return ret
+    } else {
+        return 1
+    }
+}
+
+fn f(i) {
+    return g(i)
+}
+
+fn main() {
+    let i = 0
+    let sum = 0
+    while leq(i, 10) {
+        sum = add(f(i), sum)
+        i = add(i, 1)
+    }
+
+    print(sum)
+}

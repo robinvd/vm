@@ -1,15 +1,21 @@
 #![recursion_limit = "1000"]
 
-use std::fs;
-use std::io::Read;
+use std::{fs, io::Read};
 
 use clap::{App, Arg};
 
-use sabi::compiler;
-use sabi::parser;
-use sabi::vm;
+use sabi::{compiler, parser, vm};
 
 fn main() {
+    std::panic::set_hook(Box::new(|x| {
+        println!("Custom panic hook: {}", x);
+
+        unsafe {
+            let val: u32 = *std::ptr::null();
+            println!("{}", val);
+        }
+    }));
+
     let matches = App::new("SABI VM")
         .version("1.0")
         .author("Robin <robinjint@gmail.com>")
@@ -43,6 +49,19 @@ fn main() {
                 .multiple(true)
                 .help("Sets the level of verbosity"),
         )
+        .arg(
+            Arg::with_name("quit")
+                .short("q")
+                .long("quit")
+                .multiple(false)
+                .help("does not execute the sabi program"),
+        )
+        .arg(
+            Arg::with_name("no-jit")
+                .long("no-jit")
+                .multiple(false)
+                .help("disable the jit"),
+        )
         .get_matches();
 
     let mut vm = vm::VM::default();
@@ -51,6 +70,9 @@ fn main() {
     vm.register_internal();
     if matches.is_present("debug") {
         vm.debug = true;
+    }
+    if matches.is_present("no-jit") {
+        vm.jit = false;
     }
 
     let mut input = String::new();
@@ -77,10 +99,19 @@ fn main() {
         println!("start state:\n{:?}", vm);
     }
 
+    if matches.is_present("quit") {
+        return;
+    }
+
     let mut f = vm.new_fiber("start").expect("failed to make fiber");
     let result = if vm.debug { f.debug_run() } else { f.run() };
+    // let result = f.trace();
 
-    if matches.is_present("verbose") {
+    if result.is_err() {
+        f.print_stack_trace()
+    }
+
+    if matches.is_present("verbose") || result.is_err() {
         println!("result: {:?}", result);
     }
 }

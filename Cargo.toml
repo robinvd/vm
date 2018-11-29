@@ -22,6 +22,10 @@ combine = "3.6.1"
 # combine-language = "3.0"
 clap = "2.32"
 ordered-float = "1.0"
+cranelift = "0.22.0"
+cranelift-module = "0.22.0"
+cranelift-simplejit = "0.22.0"
+cranelift-codegen = "0.22.0"
 
 [dev-dependencies]
 criterion = "0.2"

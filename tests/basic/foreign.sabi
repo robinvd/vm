@@ -1,4 +1,5 @@
 fn main() {
-    print_info()
-    print(read_line())
+    while True {
+        print_info()
+    }
 }

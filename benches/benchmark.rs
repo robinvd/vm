@@ -22,10 +22,10 @@ fn load_file(file: impl AsRef<std::path::Path>) -> String {
 
 fn load_vm<'a>(input: &'a str, buffer: Box<'a + std::io::Write + Sync>) -> VM<'a> {
     use combine::Parser;
-    use sabi::compiler;
-    use sabi::parser;
+    use sabi::{compiler, parser};
 
     let mut vm = VM::new(buffer);
+    vm.jit = false;
     vm.register_basic();
 
     let parsed = parser::code::parse_file()
@@ -59,5 +59,33 @@ fn sqrt_benchmark(c: &mut Criterion) {
     });
 }
 
+fn trace_jit(input: &str) {
+    let mut buffer = std::io::sink();
+    let mut vm = load_vm(input, Box::new(&mut buffer));
+    vm.jit = true;
+
+    vm.new_fiber("start").unwrap().run().unwrap();
+}
+
+fn trace_no_jit(input: &str) {
+    let mut buffer = std::io::sink();
+    let mut vm = load_vm(input, Box::new(&mut buffer));
+    vm.jit = false;
+
+    vm.new_fiber("start").unwrap().run().unwrap();
+}
+
+fn trace_jit_compare(c: &mut Criterion) {
+    let file = load_file("tests/programs/trace.sabi");
+
+    let jit = criterion::Fun::new("jit", |b, input: &String| b.iter(|| trace_jit(&*input)));
+    let no_jit = criterion::Fun::new("no jit", |b, input: &String| b.iter(|| trace_no_jit(&*input)));
+
+    let functions = vec![jit, no_jit];
+
+    c.bench_functions("trace", functions, file);
+}
+
 criterion_group!(benches, sqrt_benchmark, fib_benchmark);
-criterion_main!(benches);
+criterion_group!(jit, trace_jit_compare);
+criterion_main!(benches, jit);

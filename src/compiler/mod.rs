@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
-use crate::parser::code::{Expr, Function, TopLevel};
-use crate::vm::{opcode::Opcode, Block, VMError, VM};
+use crate::{
+    parser::code::{Expr, Function, TopLevel},
+    vm::{opcode::Opcode, Block, VMError, VM},
+};
 
 #[derive(Debug)]
 struct Context<'a> {
@@ -49,18 +51,18 @@ impl<'a> Context<'a> {
                 self.add_opcode(vm, Opcode::Const, Some(loc as u16))?;
             }
             Expr::While(p, body) => {
-                let while_label = self.block.add_label();
-                let done_label = self.block.reserve_label();
-                self.compile_expr(vm, p)?;
-                self.add_opcode(vm, Opcode::Not, None)?;
-                self.add_opcode(vm, Opcode::JmpT, Some(done_label.0))?;
+                let cond_label = self.block.reserve_label();
+                self.add_opcode(vm, Opcode::Jmp, Some(cond_label.0))?;
 
+                let while_label = self.block.add_label();
                 for a in body {
                     self.compile_expr(vm, &a)?;
                 }
 
-                self.add_opcode(vm, Opcode::Jmp, Some(while_label.0))?;
-                self.block.place_label(done_label);
+                self.block.place_label(cond_label);
+                self.compile_expr(vm, p)?;
+                // self.add_opcode(vm, Opcode::Not, None)?;
+                self.add_opcode(vm, Opcode::JmpT, Some(while_label.0))?;
             }
             Expr::If(p, t, maybe_f) => {
                 let f_label = self.block.reserve_label();
@@ -137,7 +139,7 @@ pub fn compile_f(vm: &mut VM, f: &Function) -> Result<(), VMError> {
     let block_loc = vm.reserve_block(f.name);
     let mut context = Context::new(f.name, f.args.len());
 
-    for a in &f.args {
+    for a in f.args.iter().rev() {
         let i = context.insert_name(&a);
         context.block.add_opcode(vm, Opcode::Store, Some(i))?;
     }

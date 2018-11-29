@@ -1,13 +1,22 @@
-use std::collections::{HashMap, LinkedList};
-use std::sync::{Arc, Mutex};
-use std::{fmt, io};
+use std::{
+    collections::{HashMap, LinkedList},
+    fmt, io,
+    sync::{atomic, Arc, Mutex},
+};
 
 pub mod opcode;
 pub mod value;
 
-use self::value::*;
+mod jit;
+mod trace;
 
-use self::opcode::Opcode;
+pub use self::value::Value;
+
+use self::{
+    opcode::Opcode,
+    trace::{Trace, TraceItem},
+    value::*,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum VMError {
@@ -47,12 +56,18 @@ pub struct Fiber<'a, 'write> {
 /// The struct only contains 'stack' values
 /// so that no allocations have to happen by creating a new stack frame
 /// (except for growing both stacks)
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct FState<'a> {
     current_block: &'a Block,
     code_ptr: usize,
     stack_start: usize,
     local_stack_start: usize,
+}
+
+impl<'a> std::fmt::Debug for FState<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "FState {{{:?}, code_ptr: {:04x}, {}, {}}}", self.current_block, self.code_ptr, self.stack_start, self.local_stack_start)
+    }
 }
 
 impl<'a> FState<'a> {
@@ -71,6 +86,15 @@ impl<'a> FState<'a> {
             code_ptr: 0,
             stack_start,
             local_stack_start,
+        }
+    }
+
+    fn shallow_clone(&self) -> Self {
+        Self {
+            current_block: self.current_block,
+            code_ptr: self.code_ptr,
+            stack_start: self.stack_start,
+            local_stack_start: self.local_stack_start,
         }
     }
 
@@ -101,15 +125,21 @@ impl<'a> FState<'a> {
         num
     }
 
-    fn jump_to_label_index(&mut self, index: usize) -> Result<(), VMError> {
-        let new_code_ptr = self.current_block.label_index[index];
+    fn jump_to_label_index(&mut self, index: usize) -> Result<(usize, isize), VMError> {
+        let new_code_ptr = self.current_block.label_index[index].0;
+        let count = self.current_block.label_index[index]
+            .1
+            .fetch_add(1, atomic::Ordering::Relaxed);
+        let f_ptr = self.current_block.label_index[index]
+            .2
+            .load(atomic::Ordering::Relaxed);
 
         if new_code_ptr as usize >= self.current_block.code.len() {
             return Err(VMError::RuntimeError("jmp outside of code".to_owned()));
         }
         self.code_ptr = new_code_ptr as usize;
 
-        Ok(())
+        Ok((count, f_ptr))
     }
 
     fn jump_to_addr(&mut self, index: usize) {
@@ -189,6 +219,14 @@ impl<'a, 'write> Fiber<'a, 'write> {
         }
     }
 
+    pub fn print_stack_trace(&self) {
+        println!("stack trace\nlast call last");
+        for f in self.f.iter() {
+            println!("{}", f.current_block.name)
+        }
+        println!("{}", self.current_f.current_block.name);
+    }
+
     pub fn push(&mut self, x: Value) {
         self.value_stack.push(x)
     }
@@ -232,8 +270,41 @@ impl<'a, 'write> Fiber<'a, 'write> {
         self.current_f = self.f.pop().unwrap();
     }
 
-    fn step(&mut self) -> Result<(), VMError> {
-        let instr = self.current_f.advance_opcode();
+    pub fn call_foreign(&mut self, f: extern "C" fn(&mut Self), n_args: usize) {
+        let base_stack_start = self.current_f.stack_start;
+
+        // println!("call_foreign vm len:{} n_args:{}", self.value_stack.len(), n_args);
+        self.current_f.stack_start = self.value_stack.len() - n_args;
+
+        f(self);
+
+        let ret_val = if self.current_f.stack_start < self.value_stack.len() {
+            *self.value_stack.last().unwrap()
+        } else {
+            Value::nil()
+        };
+        // println!("call_foreign ret val: {}", ret_val);
+
+        self.value_stack.truncate(base_stack_start);
+        self.current_f.stack_start = base_stack_start;
+        self.value_stack.push(ret_val);
+    }
+
+    fn new_trace_struct(&self) -> Trace<'a, 'write> {
+        Trace {
+            buf: Vec::new(),
+
+            block: self.current_f.current_block,
+            vm: self.base,
+
+            start_fstate: self.f.len(),
+            loc:  self.current_f.code_ptr,
+            start_local_stack: self.current_f.local_stack_start,
+        }
+    }
+
+    #[inline(always)]
+    fn step(&mut self, instr: Opcode, trace: Option<&mut Trace<'a, 'write>>) -> Result<(), VMError> {
         match instr {
             Opcode::Halt => return Err(VMError::Halt),
             Opcode::Const => {
@@ -241,9 +312,17 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 let c = self.current_f.current_block.constants[x];
                 let new = self.deep_clone(c);
                 self.push(new);
+
+                if let Some(t) = trace {
+                    t.push(TraceItem::Const(c));
+                }
             }
             Opcode::Nil => {
                 self.push(Value::Nil);
+
+                if let Some(t) = trace {
+                    t.push(TraceItem::Nil)
+                }
             }
             Opcode::Num => {
                 let x = self.current_f.advance_u16() as f64;
@@ -261,16 +340,22 @@ impl<'a, 'write> Fiber<'a, 'write> {
             }
             Opcode::Load => {
                 let x = self.current_f.advance_u16() as usize;
-                // let val = self.current_f().locals[x];
                 let start = self.current_f.local_stack_start;
                 let val = self.local_stack[start + x];
                 self.push(val);
+
+                if let Some(t) = trace {
+                    t.push(TraceItem::Load(start + x - t.start_local_stack));
+                }
             }
             Opcode::Store => {
                 let x = self.current_f.advance_u16() as usize;
-                // self.current_f().locals[x] = self.pop()?;
                 let start = self.current_f.local_stack_start;
                 self.local_stack[start + x] = self.pop()?;
+
+                if let Some(t) = trace {
+                    t.push(TraceItem::Store(start + x - t.start_local_stack));
+                }
             }
             Opcode::Call => {
                 let x = self.current_f.advance_u16();
@@ -278,7 +363,13 @@ impl<'a, 'write> Fiber<'a, 'write> {
             }
             Opcode::CallForeign => {
                 let f_index = self.current_f.advance_u16();
-                self.base.fn_foreign[f_index as usize](self);
+                let f = self.base.fn_foreign[f_index as usize];
+
+                self.call_foreign(f.1, f.0);
+
+                if let Some(t) = trace {
+                    t.push(TraceItem::Foreign(f_index));
+                }
             }
             Opcode::Ret => self.pop_frame(),
             Opcode::Pop => {
@@ -288,28 +379,44 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 let val = self.pop()?;
                 let mut data = self.base.output.lock().unwrap();
                 writeln!(data, "{}", val);
+                if let Some(t) = trace {
+                    t.push(TraceItem::Print);
+                }
             }
             Opcode::Add => {
                 let a = self.pop()?;
                 let b = self.pop()?;
-                self.push(Value::binary_op(a, b, |a, b| Value::number(a + b))?);
+                // self.push(Value::binary_op(a, b, |a, b| Value::number(a + b))?);
+                self.push(Value::binary_op(a, b, trace, TraceItem::FAdd, |a, b| {
+                    Value::number(a + b)
+                })?);
             }
             Opcode::Mul => {
                 let a = self.pop()?;
                 let b = self.pop()?;
-                self.push(Value::binary_op(a, b, |a, b| Value::number(a * b))?);
+                self.push(Value::binary_op(a, b, trace, TraceItem::FMul, |a, b| {
+                    Value::number(a * b)
+                })?);
             }
             Opcode::Div => {
                 let b = self.pop()?;
                 let a = self.pop()?;
-                self.push(Value::binary_op(a, b, |a, b| Value::number(a / b))?);
+                self.push(Value::binary_op(a, b, trace, TraceItem::FDiv, |a, b| {
+                    Value::number(a / b)
+                })?);
             }
             Opcode::Neg => {
                 let a = self.pop()?;
+                if let Some(t) = trace {
+                    t.push(TraceItem::FNeg);
+                }
                 self.push(a.unary_op(|a| -a)?);
             }
             Opcode::Not => {
                 let a = self.pop()?;
+                if let Some(t) = trace {
+                    t.push(TraceItem::Not);
+                }
                 self.push(!a);
             }
             Opcode::LEQ => {
@@ -318,7 +425,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 // thus b will be popped first
                 let b = self.pop()?;
                 let a = self.pop()?;
-                self.push(Value::binary_op(a, b, |a, b| {
+                self.push(Value::binary_op(a, b, trace, TraceItem::LEQ, |a, b| {
                     if a <= b {
                         Value::True
                     } else {
@@ -330,7 +437,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 // see LEQ
                 let b = self.pop()?;
                 let a = self.pop()?;
-                self.push(Value::binary_op(a, b, |a, b| {
+                self.push(Value::binary_op(a, b, trace, TraceItem::GEQ, |a, b| {
                     if a >= b {
                         Value::True
                     } else {
@@ -348,16 +455,88 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 if cond.is_true() {
                     self.current_f.jump_to_addr(label_index as usize);
                 }
+                if let Some(t) = trace {
+                    let mut gs: Vec<FState<'a>> = self.f[t.start_fstate..].into_iter().cloned().collect();
+                    gs.push(self.current_f.clone());
+                    t.push(TraceItem::Guard(cond.is_true(), gs));
+                }
             }
             Opcode::Jmp => {
+                pub extern "C" fn as_number(val: &Value) -> f64 {
+                    val.as_number_unchecked()
+                }
                 let x = self.current_f.advance_u16();
-                self.current_f.jump_to_label_index(x as usize)?;
+                let (count, f_ptr) = self.current_f.jump_to_label_index(x as usize)?;
+
+                // if f_ptr != 0 {
+                //     let f = unsafe { std::mem::transmute::<_, fn(isize, isize, isize)>(f_ptr) };
+                //     f(
+                //         (&self.value_stack) as *const _ as isize,
+                //         (&self.local_stack) as *const _ as isize,
+                //         &as_number as *const _ as isize,
+                //     )
+                // } else if count > 1 && trace.is_none() && self.base.jit {
+                //     self.trace(x)?;
+                // }
             }
             Opcode::JmpT => {
                 let label_index = self.current_f.advance_u16();
+                let start = self.current_f.code_ptr;
                 let cond = self.pop()?;
                 if cond.is_true() {
-                    self.current_f.jump_to_label_index(label_index as usize)?;
+                    let (count, f_ptr) =
+                        self.current_f.jump_to_label_index(label_index as usize)?;
+
+                    if f_ptr != 0 {
+                        unsafe {
+                            // maybe not thread safe
+                            // as the ptr is atomic but the content is not
+                            let jf = std::mem::transmute::<_, &jit::JitFunction>(f_ptr);
+                            let f = std::mem::transmute::<_, fn(isize, isize, isize) -> isize>(jf.code_ptr);
+                            let arg1 =
+                                self.value_stack.as_ptr().add(self.current_f.stack_start) as isize;
+                            let arg2 = self
+                                .local_stack
+                                .as_ptr()
+                                .add(self.current_f.local_stack_start)
+                                as isize;
+                            let arg3 = self as *const Fiber as isize;
+                            // println!("args: {}, {}", arg1, arg2);
+
+                            self.local_stack
+                                .resize(self.current_f.local_stack_start + jf.local_stack_space + 1, Value::nil());
+                            println!("start jit f({:04x},{:04x},{:04x})", arg1, arg2, arg3);
+                            let restore_fstates_ptr = f(arg1, arg2, arg3);
+                            let fstates: &mut Vec<FState> = {
+                                let ptr = restore_fstates_ptr as *mut Vec<FState>;
+                                &mut *ptr
+                            };
+
+                            // self.f.push(self.current_f.clone());
+                            self.f.extend_from_slice(fstates);
+                            println!("done jit f, f's: {:?}", self.f);
+                            self.current_f = self.f.pop().unwrap();
+                        };
+                    } else if count > 1
+                        && trace.is_none()
+                        && self.base.jit
+                        && start > self.current_f.code_ptr
+                    {
+                        self.trace(label_index)?;
+                    }
+                }
+                if let Some(t) = trace {
+                    let mut gs: Vec<FState<'a>> = if t.start_fstate  < self.f.len() {
+                        self.f[t.start_fstate ..].to_vec()
+                    } else {
+                        Vec::new()
+                    };
+
+                    let mut current_f = self.current_f.clone();
+                    current_f.code_ptr = start;
+                    gs.push(current_f);
+
+                    t.push(TraceItem::Guard(cond.is_true(), gs));
                 }
             }
             Opcode::New => {}
@@ -373,17 +552,57 @@ impl<'a, 'write> Fiber<'a, 'write> {
         Ok(())
     }
 
+    pub fn trace(&mut self, label_index: u16) -> Result<(), VMError> {
+        let start_loc = self.current_f.code_ptr;
+        let start_call_stack_len = self.f.len();
+        let start_f: *const Block = self.current_f.current_block;
+        let max_len = 100;
+
+        let mut t = self.new_trace_struct();
+        let mut len = 0;
+        while (len < max_len
+            && (self.current_f.code_ptr != start_loc
+                || self.current_f.current_block as *const _ != start_f
+                || start_call_stack_len != self.f.len()))
+            || len == 0
+        {
+            let instr = self.current_f.advance_opcode();
+            println!(
+                "trace ({}:{:04x}): {:?}",
+                self.current_f.current_block.name, self.current_f.code_ptr, instr
+            );
+            len += 1;
+
+            self.step(instr, Some(&mut t))?;
+        }
+
+        // println!("trace result ({},{}): {:?}", start_fn, start_loc, t);
+        if len < max_len
+        // && &self.current_f as *const _ == start_f
+        {
+            let jf = jit::JIT::new().compile(&t).unwrap();
+            let ptr = Box::into_raw(Box::new(jf)) as isize;
+            self.current_f.current_block.label_index[label_index as usize]
+                .2
+                .store(ptr, atomic::Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
     pub fn debug_run(&mut self) -> Result<Value, VMError> {
         loop {
+            let loc = self.current_f.code_ptr;
+            let instr = self.current_f.advance_opcode();
             println!("stack: {:?}", self.value_stack);
             println!("locals: {:?}", self.local_stack);
             println!(
-                "code: {} {:04x}",
-                self.current_f.current_block.name, self.current_f.code_ptr
+                "code: ({},{:04x}): {:?}",
+                self.current_f.current_block.name, loc, instr
             );
             let mut input = String::new();
             io::stdin().read_line(&mut input).unwrap();
-            match self.step() {
+
+            match self.step(instr, None) {
                 Ok(_) => continue,
                 Err(VMError::Halt) => return Ok(self.pop()?),
                 Err(e) => return Err(e),
@@ -393,7 +612,8 @@ impl<'a, 'write> Fiber<'a, 'write> {
 
     pub fn run(&mut self) -> Result<Value, VMError> {
         loop {
-            match self.step() {
+            let instr = self.current_f.advance_opcode();
+            match self.step(instr, None) {
                 Ok(_) => continue,
                 Err(VMError::Halt) => return Ok(self.pop()?),
                 Err(e) => return Err(e),
@@ -402,11 +622,16 @@ impl<'a, 'write> Fiber<'a, 'write> {
     }
 }
 
+enum BlockLabel<'a> {
+    BytecodeLoc(usize, atomic::AtomicUsize),
+    JitF(atomic::AtomicIsize, usize, Vec<FState<'a>>),
+}
+
 pub struct Block {
     name: String,
     code: Vec<u8>,
 
-    label_index: Vec<u16>,
+    label_index: Vec<(u16, atomic::AtomicUsize, atomic::AtomicIsize)>,
 
     constants: Vec<Value>,
 
@@ -414,7 +639,7 @@ pub struct Block {
     pub local_n: usize,
 }
 
-impl fmt::Debug for Block {
+impl fmt::Display for Block {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "{}:", self.name);
         let mut i = 0;
@@ -444,6 +669,12 @@ impl fmt::Debug for Block {
         writeln!(f, "const  {:?}", self.constants);
 
         Ok(())
+    }
+}
+
+impl fmt::Debug for Block {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Block: {}", self.name)
     }
 }
 
@@ -532,30 +763,30 @@ impl Block {
         self.add_opcode(vm, Opcode::End, None)
             .expect("internal error");
 
-        let mut f = CodeTraverse::new();
+        // let mut f = CodeTraverse::new();
 
-        loop {
-            let op = f.advance_opcode(self);
-            match op {
-                Opcode::End => break,
-                Opcode::Jmp => {
-                    let label_index = f.advance_u16(self);
-                    let absolute_addr = self.label_index[label_index as usize];
-                    f.set_last_opcode(self, Opcode::JmpDirect);
-                    f.set_last_arg(self, absolute_addr);
-                }
-                Opcode::JmpT => {
-                    let label_index = f.advance_u16(self);
-                    let absolute_addr = self.label_index[label_index as usize];
-                    f.set_last_opcode(self, Opcode::JmpTDirect);
-                    f.set_last_arg(self, absolute_addr);
-                }
-                op if op.has_arg() => {
-                    f.advance_u16(self);
-                }
-                _ => continue,
-            };
-        }
+        // loop {
+        //     let op = f.advance_opcode(self);
+        //     match op {
+        //         Opcode::End => break,
+        //         Opcode::Jmp => {
+        //             let label_index = f.advance_u16(self);
+        //             let absolute_addr = self.label_index[label_index as usize].0;
+        //             f.set_last_opcode(self, Opcode::JmpDirect);
+        //             f.set_last_arg(self, absolute_addr);
+        //         }
+        //         Opcode::JmpT => {
+        //             let label_index = f.advance_u16(self);
+        //             let absolute_addr = self.label_index[label_index as usize].0;
+        //             f.set_last_opcode(self, Opcode::JmpTDirect);
+        //             f.set_last_arg(self, absolute_addr);
+        //         }
+        //         op if op.has_arg() => {
+        //             f.advance_u16(self);
+        //         }
+        //         _ => continue,
+        //     };
+        // }
     }
 
     pub fn add_data(&mut self, data: Value) -> usize {
@@ -570,7 +801,11 @@ impl Block {
     pub fn add_label(&mut self) -> Label {
         let opcode_index = self.code.len();
         let new_label_index = self.label_index.len();
-        self.label_index.push(opcode_index as u16);
+        self.label_index.push((
+            opcode_index as u16,
+            atomic::AtomicUsize::new(0),
+            atomic::AtomicIsize::new(0),
+        ));
 
         Label(new_label_index as u16)
     }
@@ -582,17 +817,25 @@ impl Block {
     /// This is useful when you want to jump to a label that will be defined later
     pub fn reserve_label(&mut self) -> Label {
         let new_label_index = self.label_index.len();
-        self.label_index.push(1 << 15);
+        self.label_index.push((
+            1 << 15,
+            atomic::AtomicUsize::new(0),
+            atomic::AtomicIsize::new(0),
+        ));
 
         Label(new_label_index as u16)
     }
 
     pub fn place_label(&mut self, l: Label) {
-        if self.label_index[l.0 as usize] != 1 << 15 {
+        if self.label_index[l.0 as usize].0 != 1 << 15 {
             panic!("place_label: label already placed");
         }
 
-        self.label_index[l.0 as usize] = self.code.len() as u16;
+        self.label_index[l.0 as usize] = (
+            self.code.len() as u16,
+            atomic::AtomicUsize::new(0),
+            atomic::AtomicIsize::new(0),
+        );
 
         // explicitly drop the label for clippy lints
         drop(l)
@@ -611,7 +854,7 @@ impl<'a> fmt::Debug for VM<'a> {
         writeln!(f, "{:?}", self.fn_labels)?;
 
         for b in &self.blocks {
-            writeln!(f, "{:?}", b)?;
+            writeln!(f, "{}", b)?;
         }
 
         Ok(())
@@ -622,11 +865,12 @@ pub struct VM<'write> {
     blocks: Vec<Block>,
     fn_labels: HashMap<String, u16>,
 
-    fn_foreign: Vec<fn(&mut Fiber)>,
+    fn_foreign: Vec<(usize, extern "C" fn(&mut Fiber))>,
 
     output: Arc<Mutex<Box<io::Write + 'write>>>,
 
     pub debug: bool,
+    pub jit: bool,
 }
 
 impl<'a> VM<'a> {
@@ -640,6 +884,7 @@ impl<'a> VM<'a> {
             output: Arc::new(Mutex::new(output)),
 
             debug: false,
+            jit: true,
         }
     }
 
@@ -698,9 +943,9 @@ impl<'a> VM<'a> {
         self.add_block(block);
     }
 
-    pub fn register_foreign(&mut self, name: &str, f: fn(&mut Fiber), n_args: usize) {
+    pub fn register_foreign(&mut self, name: &str, f: extern "C" fn(&mut Fiber), n_args: usize) {
         let index = self.fn_foreign.len();
-        self.fn_foreign.push(f);
+        self.fn_foreign.push((n_args, f));
         // self.fn_foreign_labels.insert(name.to_owned(), index);
 
         let mut bl = Block::new(name, n_args);
@@ -711,13 +956,14 @@ impl<'a> VM<'a> {
     }
 
     pub fn register_io(&mut self) {
-        fn vm_read_line(fiber: &mut Fiber) {
+        extern "C" fn vm_read_line(fiber: &mut Fiber) {
             let mut buffer = String::new();
             std::io::stdin().read_line(&mut buffer).unwrap();
             fiber.push(Value::object(Object::String(buffer)));
         }
-        fn vm_print_info(_fiber: &mut Fiber) {
+        extern "C" fn vm_print_info(fiber: &mut Fiber) {
             println!("sabi vm, version: 0.1");
+            println!("stack size: {}", fiber.value_stack.len());
         }
 
         self.register_foreign("read_line", vm_read_line, 0);
@@ -733,20 +979,31 @@ impl<'a> VM<'a> {
             vm.add_block(bl);
         }
 
-        fn vm_floor(fiber: &mut Fiber) {
+        extern "C" fn vm_floor(fiber: &mut Fiber) {
             let val = fiber.pop().unwrap();
             fiber.push(val.unary_op(|x| x.floor()).unwrap());
         }
 
-        fn vm_ceil(fiber: &mut Fiber) {
+        extern "C" fn vm_ceil(fiber: &mut Fiber) {
             let val = fiber.pop().unwrap();
             fiber.push(val.unary_op(|x| x.ceil()).unwrap());
         }
 
-        fn vm_pow(fiber: &mut Fiber) {
+        extern "C" fn vm_pow(fiber: &mut Fiber) {
             let b = fiber.pop().unwrap();
             let a = fiber.pop().unwrap();
-            fiber.push(Value::binary_op(a, b, |a, b| Value::number(a.powf(b))).unwrap());
+            fiber.push(
+                Value::binary_op(a, b, None, TraceItem::Foreign(0), |a, b| {
+                    Value::number(a.powf(b))
+                })
+                .unwrap(),
+            );
+        }
+
+        extern "C" fn vm_and(fiber: &mut Fiber) {
+            let b = fiber.pop().unwrap();
+            let a = fiber.pop().unwrap();
+            fiber.push(a.and(b));
         }
 
         register_basic_instr(self, "add", 2, &[Opcode::Add]);
@@ -763,13 +1020,14 @@ impl<'a> VM<'a> {
         self.register_foreign("floor", vm_floor, 1);
         self.register_foreign("ceil", vm_ceil, 1);
         self.register_foreign("pow", vm_pow, 2);
+        self.register_foreign("and", vm_and, 2);
     }
 
     pub fn register_internal(&mut self) {
-        fn vm_collect(fiber: &mut Fiber) {
+        extern "C" fn vm_collect(fiber: &mut Fiber) {
             fiber.collect();
         }
-        fn vm_count(fiber: &mut Fiber) {
+        extern "C" fn vm_count(fiber: &mut Fiber) {
             fiber.push(Value::number(fiber.gc_len() as f64));
         }
 
@@ -798,8 +1056,7 @@ mod tests {
 
     fn load_vm<'a>(input: &'a str, buffer: &'a mut Vec<u8>) -> VM<'a> {
         use combine::Parser;
-        use crate::compiler;
-        use crate::parser;
+        use crate::{compiler, parser};
 
         let mut vm = VM::new(Box::new(buffer));
         vm.register_basic();

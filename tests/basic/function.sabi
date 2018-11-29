@@ -1,9 +1,10 @@
-fn f(a) {
+fn f(a,b) {
+    print(b)
     return a
 }
 
 fn main() {
-    let x = f(1)
-    let y,z = f(2),11
+    let x = f(1,1)
+    let y,z = f(2,3),11
     print(x)
 }

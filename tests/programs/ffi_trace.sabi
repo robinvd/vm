@@ -1,0 +1,10 @@
+fn main() {
+
+    let i = 0
+    let sum = 0
+    while leq(i, 10) {
+        i = add(1,i)
+        sum = add(floor(1.5),i)
+    }
+    print(sum)
+}

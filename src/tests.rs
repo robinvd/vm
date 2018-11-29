@@ -1,9 +1,10 @@
 //! integration tests,
 //! tests are found in tests/
 
-use crate::compiler;
-use crate::parser;
-use crate::vm::{value::Value, VMError, VM};
+use crate::{
+    compiler, parser,
+    vm::{value::Value, VMError, VM},
+};
 
 use combine::Parser;
 use std::io::Read;
@@ -65,7 +66,7 @@ fn test_fib() {
 fn test_function() {
     let (out, res) = test_file("tests/basic/function.sabi");
     assert_eq!(res, Ok(Value::nil()));
-    assert_eq!(out, b"1\n");
+    assert_eq!(out, b"1\n3\n1\n");
 }
 
 #[test]

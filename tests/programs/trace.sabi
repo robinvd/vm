@@ -1,0 +1,14 @@
+fn addOne(x) {
+    return add(x,1)
+}
+
+fn main() {
+    let i = 0
+    let sum = 0
+    while leq(i, 10) {
+        sum = add(sum, addOne(i))
+        i = add(i, 1)
+        print(sum)
+    }
+    print(sum)
+}

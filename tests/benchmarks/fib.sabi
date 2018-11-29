@@ -1,0 +1,23 @@
+
+fn fib(x) {
+    if leq(x,2) {
+        return x
+    } else {
+        return add(
+            fib(add(x,-1)),
+            fib(add(x,-2))
+        )
+    }
+}
+
+fn main() {
+    let i = 1
+    let sum = 0
+    
+    while leq(i, 1000) {
+        i = add(i, 1)
+        sum = add(sum, fib(20))
+    }
+
+    print(sum)
+}
