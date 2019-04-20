@@ -10,34 +10,7 @@ use combine::{
 use crate::parser::*;
 use crate::vm::value::{Object, Value};
 
-#[derive(Debug, PartialEq)]
-pub struct Function<'a> {
-    pub name: &'a str,
-    pub args: Vec<&'a str>,
-    pub n_returns: usize,
-    pub body: Vec<Expr<'a>>,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum TopLevel<'a> {
-    Function(Function<'a>),
-    // Use(UseTree<'a>),
-    Use(Vec<&'a str>),
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Expr<'a> {
-    Lit(Value),
-    Call(&'a str, Vec<Expr<'a>>),
-    Tuple(Vec<Expr<'a>>),
-    Var(&'a str),
-    While(Box<Expr<'a>>, Vec<Expr<'a>>),
-    If(Box<Expr<'a>>, Vec<Expr<'a>>, Option<Vec<Expr<'a>>>),
-    Let(Vec<&'a str>, Vec<Expr<'a>>),
-    Assign(&'a str, Box<Expr<'a>>),
-    Return(Vec<Expr<'a>>),
-    Index(Box<Expr<'a>>, Box<Expr<'a>>),
-}
+pub use super::ast::*;
 
 pub fn skip_whitespace<'a, I>() -> impl Parser<Input = I, Output = &'a str>
 where

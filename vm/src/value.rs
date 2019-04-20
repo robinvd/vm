@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 
 use ordered_float::OrderedFloat;
 
-use crate::vm::VMError;
+use crate::VMError;
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct GCObject {

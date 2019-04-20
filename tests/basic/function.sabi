@@ -4,6 +4,7 @@ fn f(a) {
 
 fn main() {
     let x = f(1)
-    let y,z = f(2),11
+    let y = f(2)
+    let z = 11
     print(x)
 }

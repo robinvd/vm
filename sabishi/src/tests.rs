@@ -5,7 +5,6 @@ use crate::compiler;
 use crate::parser;
 use crate::vm::{value::Value, VMError, VM};
 
-use combine::Parser;
 use std::io::Read;
 
 pub fn test_file(file: impl AsRef<std::path::Path>) -> (Vec<u8>, Result<Value, VMError>) {
@@ -15,17 +14,15 @@ pub fn test_file(file: impl AsRef<std::path::Path>) -> (Vec<u8>, Result<Value, V
         vm.register_basic();
         let mut input = String::new();
 
-        std::fs::File::open(file)
+        std::fs::File::open(std::path::Path::new("../").join(file))
             .unwrap()
             .read_to_string(&mut input)
             .unwrap();
 
         let i: &str = &input;
-        let parsed = parser::code::parse_file()
-            .easy_parse(i)
-            .expect("failed to parse");
+        let parsed = parser::grammar::ModuleParser::new().parse(&input).expect("failed to parse");
 
-        compiler::compile(&mut vm, &parsed.0).expect("failed to compile");
+        compiler::compile(&mut vm, &parsed).expect("failed to compile");
         vm.add_start();
 
         vm.new_fiber("start").and_then(|mut f| f.run())

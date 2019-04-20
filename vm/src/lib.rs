@@ -294,6 +294,11 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 let b = self.pop()?;
                 self.push(Value::binary_op(a, b, |a, b| Value::number(a + b))?);
             }
+            Opcode::Sub => {
+                let a = self.pop()?;
+                let b = self.pop()?;
+                self.push(Value::binary_op(a, b, |a, b| Value::number(b-a))?);
+            }
             Opcode::Mul => {
                 let a = self.pop()?;
                 let b = self.pop()?;
@@ -504,7 +509,7 @@ impl Block {
         }
     }
 
-    pub(crate) fn add_opcode(
+    pub fn add_opcode(
         &mut self,
         _vm: &mut VM,
         opcode: Opcode,
@@ -760,6 +765,7 @@ impl<'a> VM<'a> {
         }
 
         register_basic_instr(self, "add", 2, &[Opcode::Add]);
+        register_basic_instr(self, "sub", 2, &[Opcode::Sub]);
         register_basic_instr(self, "mul", 2, &[Opcode::Mul]);
         register_basic_instr(self, "div", 2, &[Opcode::Div]);
         register_basic_instr(self, "neg", 1, &[Opcode::Neg]);
@@ -791,50 +797,50 @@ impl<'a> VM<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vm::Opcode::*;
+    use crate::Opcode::*;
 
-    fn load_file(file: impl AsRef<std::path::Path>) -> Result<String, VMError> {
-        use std::io::Read;
+    // fn load_file(file: impl AsRef<std::path::Path>) -> Result<String, VMError> {
+    //     use std::io::Read;
 
-        let mut input = String::new();
+    //     let mut input = String::new();
 
-        std::fs::File::open(file)
-            .unwrap()
-            .read_to_string(&mut input)
-            .unwrap();
+    //     std::fs::File::open(file)
+    //         .unwrap()
+    //         .read_to_string(&mut input)
+    //         .unwrap();
 
-        Ok(input)
-    }
+    //     Ok(input)
+    // }
 
-    fn load_vm<'a>(input: &'a str, buffer: &'a mut Vec<u8>) -> VM<'a> {
-        use combine::Parser;
-        use crate::compiler;
-        use crate::parser;
+    // fn load_vm<'a>(input: &'a str, buffer: &'a mut Vec<u8>) -> VM<'a> {
+    //     use combine::Parser;
+    //     use crate::compiler;
+    //     use crate::parser;
 
-        let mut vm = VM::new(Box::new(buffer));
-        vm.register_basic();
-        vm.register_internal();
+    //     let mut vm = VM::new(Box::new(buffer));
+    //     vm.register_basic();
+    //     vm.register_internal();
 
-        let parsed = parser::code::parse_file()
-            .easy_parse(input)
-            .expect("failed to parse");
+    //     let parsed = parser::code::parse_file()
+    //         .easy_parse(input)
+    //         .expect("failed to parse");
 
-        compiler::compile(&mut vm, &parsed.0).expect("failed to compile");
-        vm.add_start();
+    //     compiler::compile(&mut vm, &parsed.0).expect("failed to compile");
+    //     vm.add_start();
 
-        vm
-    }
+    //     vm
+    // }
 
-    #[test]
-    fn test_gc() {
-        let input = load_file("tests/basic/gc.sabi").unwrap();
-        let mut buffer = Vec::new();
-        let vm = load_vm(&input, &mut buffer);
+    // #[test]
+    // fn test_gc() {
+    //     let input = load_file("tests/basic/gc.sabi").unwrap();
+    //     let mut buffer = Vec::new();
+    //     let vm = load_vm(&input, &mut buffer);
 
-        let mut f = vm.new_fiber("start").unwrap();
-        let res = f.run();
-        assert_eq!(res, Ok(Value::True));
-    }
+    //     let mut f = vm.new_fiber("start").unwrap();
+    //     let res = f.run();
+    //     assert_eq!(res, Ok(Value::True));
+    // }
 
     fn test_instr(instr: Opcode, arg: Option<u16>, vals: &[Value], result: Value) {
         let buffer = Vec::new();

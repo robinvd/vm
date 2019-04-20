@@ -3,7 +3,7 @@ use std::mem;
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u8)]
-pub(crate) enum Opcode {
+pub enum Opcode {
     // general
     Halt,
     Pop,
@@ -26,6 +26,7 @@ pub(crate) enum Opcode {
 
     // math
     Add,
+    Sub,
     Mul,
     Div,
     Neg,

@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
-use crate::parser::code::{Expr, Function, TopLevel};
-use crate::vm::{opcode::Opcode, Block, VMError, VM};
+use crate::parser::{InnerExpr, Expr, Function, TopLevel, Lit};
+use vm::{opcode::Opcode, Block, VMError, VM};
+use vm::value::Value;
 
 #[derive(Debug)]
 struct Context<'a> {
@@ -34,21 +35,40 @@ impl<'a> Context<'a> {
         self.block.add_opcode(vm, opcode, arg)
     }
 
+    fn compile_lit(&mut self, vm: &mut VM, lit: &'a Lit) -> Result<(), VMError> {
+        let v = match lit {
+            Lit::Number(n) => Value::number(*n),
+            Lit::Nil => Value::nil(),
+            Lit::True => Value::true_val(),
+            Lit::False => Value::false_val(),
+            Lit::String(s) => panic!("not str"),
+            Lit::Dict(items) => panic!("not dict"),
+            Lit::List(items) => panic!("not list"),
+
+        };
+        let loc = self.block.add_data(v);
+        self.add_opcode(vm, Opcode::Const, Some(loc as u16))?;
+
+        Ok(())
+
+    }
+
     pub fn compile_expr(&mut self, vm: &mut VM, expr: &'a Expr) -> Result<(), VMError> {
-        match expr {
-            Expr::Call(n, args) => {
+        match &**expr {
+            InnerExpr::Call(n, args) => {
                 for a in args.iter() {
                     self.compile_expr(vm, a)?;
                 }
 
-                let call_loc = vm.get_block_loc(n).expect("could not find function");
+                let call_loc = vm.get_block_loc(n).ok_or_else(|| VMError::FunctionNotFound((*n).to_owned()))?;
                 self.add_opcode(vm, Opcode::Call, Some(call_loc))?;
             }
-            Expr::Lit(i) => {
-                let loc = self.block.add_data(*i);
-                self.add_opcode(vm, Opcode::Const, Some(loc as u16))?;
+            InnerExpr::Lit(l) => {
+                self.compile_lit(vm, l)?;
+                // let loc = self.block.add_data(*i);
+                // self.add_opcode(vm, Opcode::Const, Some(loc as u16))?;
             }
-            Expr::While(p, body) => {
+            InnerExpr::While(p, body) => {
                 let while_label = self.block.add_label();
                 let done_label = self.block.reserve_label();
                 self.compile_expr(vm, p)?;
@@ -62,7 +82,7 @@ impl<'a> Context<'a> {
                 self.add_opcode(vm, Opcode::Jmp, Some(while_label.0))?;
                 self.block.place_label(done_label);
             }
-            Expr::If(p, t, maybe_f) => {
+            InnerExpr::If(p, t, maybe_f) => {
                 let f_label = self.block.reserve_label();
                 let end_label = self.block.reserve_label();
 
@@ -85,25 +105,19 @@ impl<'a> Context<'a> {
 
                 self.block.place_label(end_label);
             }
-            Expr::Let(names, exprs) => {
-                if names.len() != exprs.len() {
-                    return Err(VMError::DifferentNArgs);
-                }
-
-                for (name, expr) in names.iter().zip(exprs.iter()) {
-                    self.compile_expr(vm, expr)?;
-                    let loc = self.insert_name(name);
-                    self.add_opcode(vm, Opcode::Store, Some(loc))?;
-                }
+            InnerExpr::Let(name, expr) => {
+                self.compile_expr(vm, expr)?;
+                let loc = self.insert_name(name);
+                self.add_opcode(vm, Opcode::Store, Some(loc))?;
             }
-            Expr::Var(name) => {
+            InnerExpr::Var(name) => {
                 let loc = self
                     .names
                     .get(name)
                     .ok_or_else(|| VMError::Msg("local var not found".to_owned()))?;
                 self.add_opcode(vm, Opcode::Load, Some(*loc))?;
             }
-            Expr::Assign(name, e) => {
+            InnerExpr::Assign(name, e) => {
                 let loc = *self
                     .names
                     .get(name)
@@ -111,18 +125,18 @@ impl<'a> Context<'a> {
                 self.compile_expr(vm, e)?;
                 self.add_opcode(vm, Opcode::Store, Some(loc))?;
             }
-            Expr::Return(vals) => {
+            InnerExpr::Return(vals) => {
                 for v in vals.iter() {
                     self.compile_expr(vm, v)?;
                 }
                 self.add_opcode(vm, Opcode::Ret, None)?;
             }
-            Expr::Tuple(vals) => {
+            InnerExpr::Tuple(vals) => {
                 for v in vals.iter() {
                     self.compile_expr(vm, v)?;
                 }
             }
-            Expr::Index(val, index) => {
+            InnerExpr::Index(val, index) => {
                 self.compile_expr(vm, val)?;
                 self.compile_expr(vm, index)?;
                 self.add_opcode(vm, Opcode::Index, None)?;

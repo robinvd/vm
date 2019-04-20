@@ -1,0 +1,92 @@
+use std::str::FromStr;
+
+use codespan::{Span, ByteIndex};
+use vm::value::{Object, Value};
+
+use crate::parser::ast::*;
+
+grammar;
+
+pub Expr: Expr<'input> = Info<InnerExpr>;
+
+pub Module: Vec<TopLevel<'input>> = {
+    <TopLevel*>
+}
+
+pub TopLevel: TopLevel<'input> = {
+    Function => TopLevel::Function(<>),
+}
+
+pub Function: Function<'input> = {
+    <l: @L> "fn" <name:Ident> "(" <args:SepBy<Ident, ",">> ")" "{" <body:Info<Expr>*> "}" <r:@R>=> Function {
+        name,
+        args,
+        n_returns: 1,
+        body,
+        span: Span::new(ByteIndex::from(l as u32) ,ByteIndex::from(r as u32)),
+    },
+}
+
+Block: Vec<Expr<'input>> = "{" <Expr*> "}";
+
+BasicInnerExpr: InnerExpr<'input> = {
+    <n:Ident> "(" <args:Comma<Expr>> ")" => InnerExpr::Call(n, args),
+    <Ident> => InnerExpr::Var(<>),
+    Lit => InnerExpr::Lit(<>),
+}
+
+InnerExpr: InnerExpr<'input> = {
+    BasicInnerExpr,
+    "return" <e:Expr> => InnerExpr::Return(vec![e]),
+    "let" <v:Ident> "=" <e:Expr> => InnerExpr::Let(v,Box::new(e)),
+    <v:Ident> "=" <e:Expr> => InnerExpr::Assign(v,Box::new(e)),
+
+    "while" <cond:Expr> <body:Block>
+        => InnerExpr::While(Box::new(cond), body),
+    "if" <cond:Expr> <t:Block> <f:("else" <Block>)?>
+        => InnerExpr::If(Box::new(cond), t, f),
+}
+
+pub Lit: Lit<'input> = {
+    <"Nil"> => Lit::Nil,
+    <"True"> => Lit::True,
+    <"False"> => Lit::False,
+    <Num> => Lit::Number(<>),
+    "{" <items:Comma<(<Info<BasicInnerExpr>> "=" <Expr>)>> "}" => Lit::Dict(items),
+    "[" <items:Comma<Expr>> "]" => Lit::List(items),
+}
+
+// Num: i32 = <s:r"[0-9]+"> => i32::from_str(s).unwrap();
+
+Num: f64 = <r"[0-9]+(\.[0-9]+)?"> => f64::from_str(<>).unwrap();
+
+Ident: &'input str = <r"[a-z]+\w*"> => <>;
+
+Comma<T>: Vec<T> = SepBy<T, ",">;
+
+SepBy<T, S>: Vec<T> = {
+    <v:(<T> S)*> <e:T?> => match e {
+        None => v,
+        Some(e) => {
+            let mut v = v;
+            v.push(e);
+            v
+        }
+    }
+};
+
+SepByStrict<T, S>: Vec<T> = {
+    <v:(<T> S)*> <e:T> => {
+        v.push(e);
+        v
+    }
+}
+
+Info<T>: Info<T> = {
+    <l:@L> <t:T> <r:@R> => {
+        Info {
+            val: t,
+            span: Span::new(ByteIndex::from(l as u32) ,ByteIndex::from(r as u32)),
+        }
+    }
+}

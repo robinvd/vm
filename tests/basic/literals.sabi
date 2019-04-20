@@ -7,6 +7,9 @@ fn main() {
     let list = [1,2]
     print(list)
 
-    let map = {1=2}
+    let map = {
+        1 = 2,
+        3 = 4,
+    }
     print(map)
 }
