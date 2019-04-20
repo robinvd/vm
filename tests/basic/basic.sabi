@@ -11,13 +11,13 @@ fn main() {
     print(add(add(1,2), sub(2, add(5,7))))
 
     a = 20
-    while a {
+    while geq(a, 0) {
         print(a)
         a = sub(a, 1)
     }
 
     a = sub(0, 10)
-    while a {
+    while geq(a, 0) {
         a = add(a,1)
         print(a)
     }
