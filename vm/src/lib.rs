@@ -1,3 +1,7 @@
+#![feature(ptr_internals)]
+#![feature(allocator_api)]
+#![feature(alloc_layout_extra)]
+
 use std::collections::{HashMap, LinkedList};
 use std::sync::{Arc, Mutex};
 use std::{fmt, io};
@@ -5,9 +9,10 @@ use std::{fmt, io};
 pub mod opcode;
 pub mod value;
 
-use self::value::*;
+mod collections;
 
-use self::opcode::Opcode;
+use self::opcode::{Instruction, Opcode};
+use self::value::*;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum VMError {
@@ -297,7 +302,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
             Opcode::Sub => {
                 let a = self.pop()?;
                 let b = self.pop()?;
-                self.push(Value::binary_op(a, b, |a, b| Value::number(b-a))?);
+                self.push(Value::binary_op(a, b, |a, b| Value::number(b - a))?);
             }
             Opcode::Mul => {
                 let a = self.pop()?;
@@ -365,6 +370,8 @@ impl<'a, 'write> Fiber<'a, 'write> {
                     self.current_f.jump_to_label_index(label_index as usize)?;
                 }
             }
+            Opcode::EmptyMap => unimplemented!(),
+            Opcode::EmptyList => unimplemented!(),
             Opcode::New => {}
             Opcode::Index => {
                 let index = self.pop()?;
@@ -538,6 +545,11 @@ impl Block {
         };
 
         Ok(())
+    }
+
+    pub fn add_instruction(&mut self, vm: &mut VM, instr: Instruction) -> Result<(), VMError> {
+        let (opcode, arg) = instr.to_opcode();
+        self.add_opcode(vm, opcode, arg)
     }
 
     /// Finish this block
@@ -762,6 +774,17 @@ impl<'a> VM<'a> {
             let b = fiber.pop().unwrap();
             let a = fiber.pop().unwrap();
             fiber.push(Value::binary_op(a, b, |a, b| Value::number(a.powf(b))).unwrap());
+        }
+
+        fn vm_push(fiber: &mut Fiber) {
+            unimplemented!()
+            // let val = fiber.pop().unwrap();
+            // let list = fiber.pop().unwrap();
+
+            // if let Some(Object::List(lvec)) = list.get_object() {
+            //     let vec = lvec.lock().unwrap();
+            //     vec.push(val)
+            // }
         }
 
         register_basic_instr(self, "add", 2, &[Opcode::Add]);
