@@ -33,18 +33,6 @@ pub enum VMError {
 
 // state:
 
-/// a single thread
-///
-/// a fiber has its own stack
-pub struct Fiber<'a, 'write> {
-    base: &'a VM<'write>,
-    f: Vec<FState<'a>>,
-    current_f: FState<'a>,
-    value_stack: Vec<Value>,
-    local_stack: Vec<Value>,
-    all_gc: LinkedList<GCObject>,
-}
-
 /// a single function,
 /// it has its own labels,
 /// it shares a stack
@@ -122,6 +110,23 @@ impl<'a> FState<'a> {
     }
 }
 
+/// a single thread
+///
+/// a fiber has its own stack
+pub struct Fiber<'a, 'write> {
+    base: &'a VM<'write>,
+    f: Vec<FState<'a>>,
+    current_f: FState<'a>,
+
+    value_stack: Vec<Value>,
+    local_stack: Vec<Value>,
+    heap: Vec<ObjectInfo>,
+    free: Vec<usize>,
+
+    // TODO remove
+    all_gc: LinkedList<GCObject>,
+}
+
 impl<'a, 'write> Drop for Fiber<'a, 'write> {
     fn drop(&mut self) {
         for o in &self.all_gc {
@@ -141,8 +146,23 @@ impl<'a, 'write> Fiber<'a, 'write> {
             current_f: f,
             value_stack: Vec::default(),
             local_stack: vec![Value::nil(); local_n],
+            heap: Vec::new(),
+            free: Vec::new(),
             all_gc: LinkedList::new(),
         }
+    }
+
+    fn heap_alloc(&mut self) -> HeapRef {
+        let loc = self.heap.len();
+        let mut new = ObjectInfo::new(Object::Empty);
+        new.alive = true;
+        self.heap.push(new);
+
+        HeapRef { loc }
+    }
+
+    fn heap_mut_ref(&mut self, heap_ref: HeapRef) -> &mut Object {
+        &mut self.heap[heap_ref.loc].val
     }
 
     fn deep_clone(&mut self, val: Value) -> Value {
@@ -158,7 +178,8 @@ impl<'a, 'write> Fiber<'a, 'write> {
     }
 
     pub fn gc_len(&self) -> usize {
-        self.all_gc.len()
+        // self.all_gc.len()
+        self.heap.len() - self.free.len()
     }
 
     pub fn collect(&mut self) {
@@ -177,17 +198,13 @@ impl<'a, 'write> Fiber<'a, 'write> {
             v.traverse(&mut f)
         }
 
-        let mut new = LinkedList::new();
-        while let Some(o) = self.all_gc.pop_back() {
-            if o.object_info().mark.get() {
-                new.push_front(o);
-            } else {
-                unsafe {
-                    Box::from_raw(o.val.as_ptr());
-                }
+        for (i, item) in self.heap.iter_mut().enumerate() {
+            if !item.mark.get() {
+                item.alive = false;
+                item.val = Object::Empty;
+                self.free.push(i);
             }
         }
-        self.all_gc = new;
 
         for v in &self.value_stack {
             v.traverse(&mut f)
@@ -371,7 +388,13 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 }
             }
             Opcode::EmptyMap => unimplemented!(),
-            Opcode::EmptyList => unimplemented!(),
+            Opcode::EmptyList => {
+                let heap_ref = self.heap_alloc();
+                let ptr = self.heap_mut_ref(heap_ref);
+
+                *ptr = Object::List(Vec::new());
+                self.push(Value::Heap(heap_ref))
+            }
             Opcode::New => {}
             Opcode::Index => {
                 let index = self.pop()?;
@@ -516,21 +539,10 @@ impl Block {
         }
     }
 
-    pub fn add_opcode(
-        &mut self,
-        _vm: &mut VM,
-        opcode: Opcode,
-        arg: Option<u16>,
-    ) -> Result<(), VMError> {
+    fn add_opcode(&mut self, opcode: Opcode, arg: Option<u16>) -> Result<(), VMError> {
         if opcode.has_arg() != arg.is_some() {
             return Err(VMError::Msg("opcode/arg do not match".to_owned()));
         }
-
-        // if opcode.has_arg() {
-        //     while self.code.len() % 4 != 3 {
-        //         self.code.push(Opcode::Nop as u8)
-        //     }
-        // }
 
         self.code.push(opcode as u8);
 
@@ -538,26 +550,20 @@ impl Block {
             let num = a;
             self.code.push((num >> 8) as u8);
             self.code.push(num as u8);
-
-            // if self.debug {
-            //     println!("conversion {} -> {:?}", num, raw_bytes);
-            // }
         };
 
         Ok(())
     }
 
-    pub fn add_instruction(&mut self, vm: &mut VM, instr: Instruction) -> Result<(), VMError> {
+    pub fn add_instruction(&mut self, instr: Instruction) -> Result<(), VMError> {
         let (opcode, arg) = instr.to_opcode();
-        self.add_opcode(vm, opcode, arg)
+        self.add_opcode(opcode, arg)
     }
 
     /// Finish this block
     fn finish(&mut self, vm: &mut VM) {
-        self.add_opcode(vm, Opcode::End, None)
-            .expect("internal error");
-        self.add_opcode(vm, Opcode::End, None)
-            .expect("internal error");
+        self.add_opcode(Opcode::End, None).expect("internal error");
+        self.add_opcode(Opcode::End, None).expect("internal error");
 
         let mut f = CodeTraverse::new();
 
@@ -708,7 +714,7 @@ impl<'a> VM<'a> {
     pub fn add_start(&mut self) {
         let mut block = Block::new("start", 0);
         block
-            .add_opcode(self, Opcode::Num, Some(0))
+            .add_opcode(Opcode::Num, Some(0))
             .expect("internal error");
 
         let main_loc = *self
@@ -716,10 +722,10 @@ impl<'a> VM<'a> {
             .get("main")
             .expect("could not find 'main' function");
         block
-            .add_opcode(self, Opcode::Call, Some(main_loc as u16))
+            .add_opcode(Opcode::Call, Some(main_loc as u16))
             .expect("internal error");
         block
-            .add_opcode(self, Opcode::Halt, None)
+            .add_opcode(Opcode::Halt, None)
             .expect("internal error");
 
         self.add_block(block);
@@ -731,9 +737,9 @@ impl<'a> VM<'a> {
         // self.fn_foreign_labels.insert(name.to_owned(), index);
 
         let mut bl = Block::new(name, n_args);
-        bl.add_opcode(self, Opcode::CallForeign, Some(index as u16))
+        bl.add_opcode(Opcode::CallForeign, Some(index as u16))
             .unwrap();
-        bl.add_opcode(self, Opcode::Ret, None).unwrap();
+        bl.add_opcode(Opcode::Ret, None).unwrap();
         self.add_block(bl);
     }
 
@@ -754,9 +760,8 @@ impl<'a> VM<'a> {
     pub fn register_basic(&mut self) {
         fn register_basic_instr(vm: &mut VM, name: &str, n_args: usize, ops: &[Opcode]) {
             let mut bl = Block::new(name, n_args);
-            ops.iter()
-                .for_each(|op| bl.add_opcode(vm, *op, None).unwrap());
-            bl.add_opcode(vm, Opcode::Ret, None).unwrap();
+            ops.iter().for_each(|op| bl.add_opcode(*op, None).unwrap());
+            bl.add_opcode(Opcode::Ret, None).unwrap();
             vm.add_block(bl);
         }
 
@@ -854,16 +859,29 @@ mod tests {
     //     vm
     // }
 
-    // #[test]
-    // fn test_gc() {
-    //     let input = load_file("tests/basic/gc.sabi").unwrap();
-    //     let mut buffer = Vec::new();
-    //     let vm = load_vm(&input, &mut buffer);
+    #[test]
+    fn test_gc() {
+        let mut buffer = Vec::new();
+        let mut vm = VM::new(Box::new(buffer));
+        let mut block = Block::new("start", 0);
 
-    //     let mut f = vm.new_fiber("start").unwrap();
-    //     let res = f.run();
-    //     assert_eq!(res, Ok(Value::True));
-    // }
+        block.add_opcode(Opcode::EmptyList, None).unwrap();
+        block.add_opcode(Opcode::EmptyList, None).unwrap();
+        block.add_opcode(Opcode::Pop, None).unwrap();
+        block.add_opcode(Opcode::Halt, None).unwrap();
+
+        block.finish(&mut vm);
+        vm.add_block(block);
+
+        let mut f = vm.new_fiber("start").unwrap();
+        let res = f.run();
+        assert_eq!(res.is_ok(), true);
+
+        let start = f.gc_len();
+        f.collect();
+        let end = f.gc_len();
+        assert_eq!(start > end, true);
+    }
 
     fn test_instr(instr: Opcode, arg: Option<u16>, vals: &[Value], result: Value) {
         let buffer = Vec::new();
@@ -871,15 +889,13 @@ mod tests {
         let mut block = Block::new("test", 0);
         vals.iter().for_each(|x| {
             let i = block.add_data(*x);
-            block
-                .add_opcode(&mut vm, Opcode::Const, Some(i as u16))
-                .unwrap();
-            block.add_opcode(&mut vm, Opcode::Copy, Some(0)).unwrap();
-            block.add_opcode(&mut vm, Opcode::Print, None).unwrap();
+            block.add_opcode(Opcode::Const, Some(i as u16)).unwrap();
+            block.add_opcode(Opcode::Copy, Some(0)).unwrap();
+            block.add_opcode(Opcode::Print, None).unwrap();
         });
 
-        block.add_opcode(&mut vm, instr, arg).unwrap();
-        block.add_opcode(&mut vm, Halt, None).unwrap();
+        block.add_opcode(instr, arg).unwrap();
+        block.add_opcode(Halt, None).unwrap();
         block.finish(&mut vm);
 
         vm.add_block(block);
@@ -959,14 +975,14 @@ mod tests {
         let mut vm = VM::new(Box::new(buffer));
 
         let mut wrong = Block::new("wrong", 0);
-        wrong.add_opcode(&mut vm, Pop, None).unwrap();
-        wrong.add_opcode(&mut vm, Ret, None).unwrap();
+        wrong.add_opcode(Pop, None).unwrap();
+        wrong.add_opcode(Ret, None).unwrap();
         let wrong_loc = vm.add_block(wrong);
 
         let mut main = Block::new("main", 0);
-        main.add_opcode(&mut vm, Num, Some(21)).unwrap();
-        main.add_opcode(&mut vm, Call, Some(wrong_loc)).unwrap();
-        main.add_opcode(&mut vm, Ret, None).unwrap();
+        main.add_opcode(Num, Some(21)).unwrap();
+        main.add_opcode(Call, Some(wrong_loc)).unwrap();
+        main.add_opcode(Ret, None).unwrap();
 
         vm.add_block(main);
 
@@ -982,20 +998,20 @@ mod tests {
 
         let mut f = Block::new("f", 0);
         f.local_n = 1;
-        f.add_opcode(&mut vm, Opcode::Nil, None).unwrap();
-        f.add_opcode(&mut vm, Opcode::Num, Some(9)).unwrap();
-        f.add_opcode(&mut vm, Opcode::Store, Some(0)).unwrap();
-        f.add_opcode(&mut vm, Opcode::Ret, None).unwrap();
+        f.add_opcode(Opcode::Nil, None).unwrap();
+        f.add_opcode(Opcode::Num, Some(9)).unwrap();
+        f.add_opcode(Opcode::Store, Some(0)).unwrap();
+        f.add_opcode(Opcode::Ret, None).unwrap();
         f.finish(&mut vm);
 
         let f_loc = vm.add_block(f);
 
         let mut main = Block::new("main", 0);
         main.local_n = 1;
-        main.add_opcode(&mut vm, Opcode::Num, Some(5)).unwrap();
-        main.add_opcode(&mut vm, Opcode::Store, Some(0)).unwrap();
-        main.add_opcode(&mut vm, Opcode::Call, Some(f_loc)).unwrap();
-        main.add_opcode(&mut vm, Opcode::Halt, None).unwrap();
+        main.add_opcode(Opcode::Num, Some(5)).unwrap();
+        main.add_opcode(Opcode::Store, Some(0)).unwrap();
+        main.add_opcode(Opcode::Call, Some(f_loc)).unwrap();
+        main.add_opcode(Opcode::Halt, None).unwrap();
         main.finish(&mut vm);
 
         vm.add_block(main);

@@ -8,6 +8,11 @@ use ordered_float::OrderedFloat;
 
 use crate::VMError;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HeapRef {
+    pub(crate) loc: usize,
+}
+
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct GCObject {
     pub val: NonNull<ObjectInfo>,
@@ -54,7 +59,9 @@ pub enum Value {
     True,
     Number(OrderedFloat<f64>),
 
+    // TODO remove
     Object(GCObject),
+    Heap(HeapRef),
 }
 
 impl Traverse for Value {
@@ -78,6 +85,7 @@ impl fmt::Display for Value {
             Value::True => write!(f, "True"),
             Value::Number(n) => write!(f, "{}", n),
             Value::Object(gc) => write!(f, "{}", gc.deref()),
+            Value::Heap(ptr) => write!(f, "<Heap ptr at {}>", ptr.loc),
         }
     }
 }
@@ -215,13 +223,15 @@ impl Value {
 
 #[derive(Debug, Clone)]
 pub struct ObjectInfo {
+    pub alive: bool,
     pub mark: Cell<bool>,
-    val: Object,
+    pub val: Object,
 }
 
 impl ObjectInfo {
     pub fn new(val: Object) -> Self {
         Self {
+            alive: false,
             mark: Cell::new(false),
             val,
         }
@@ -240,6 +250,7 @@ impl std::cmp::PartialEq for ObjectInfo {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Object {
+    Empty,
     String(String),
     Map(HashMap<Value, Value>),
     List(Vec<Value>),
@@ -252,6 +263,7 @@ pub enum Object {
 impl fmt::Display for Object {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Object::Empty => write!(f, "<empty>"),
             Object::String(s) => write!(f, "{}", s),
             Object::List(l) => {
                 write!(f, "[")?;
