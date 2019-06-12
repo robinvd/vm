@@ -1,6 +1,11 @@
+[package]
+name = "vm"
+version = "0.1.0"
+authors = ["Robin van Dijk <robin.van.dijk@target-holding.nl>"]
+edition = "2018"
 
-[workspace]
-members = [
-        "vm",
-        "sabishi",
-]
+[dependencies]
+ordered-float = "1.0"
+byteorder = "1"
+regex = "1.0.5"
+lazy_static = "1.1.0"
