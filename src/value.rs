@@ -262,6 +262,7 @@ pub enum Object {
     String(String),
     Map(HashMap<Value, Value>),
     List(Vec<Value>),
+    Struct(Vec<Value>),
 
     Closure(usize),
     Fiber(usize),
@@ -299,6 +300,7 @@ impl fmt::Display for Object {
 
                 Ok(())
             }
+            Object::Struct(_) => write!(f, "<struct>"),
             Object::Closure(_) => write!(f, "<closure>"),
             Object::Fiber(_) => write!(f, "<fiber>"),
             Object::Foreign(_) => write!(f, "<foreign>"),

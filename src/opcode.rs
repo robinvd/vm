@@ -39,7 +39,9 @@ pub enum Instruction {
     Jmp(u16),
 
     // objects
-    New,
+    New(u16),
+    GetAttr(u16),
+    SetAttr(u16),
     Index,
 
     EmptyList,
@@ -94,7 +96,9 @@ impl Instruction {
             Instruction::Jmp(x) => (Opcode::Jmp, Some(x)),
 
             // objects
-            Instruction::New => (Opcode::New, None),
+            Instruction::New(x) => (Opcode::New, Some(x)),
+            Instruction::GetAttr(x) => (Opcode::GetAttr, Some(x)),
+            Instruction::SetAttr(x) => (Opcode::SetAttr, Some(x)),
             Instruction::Index => (Opcode::Index, None),
 
             Instruction::EmptyList => (Opcode::EmptyList, None),
@@ -154,6 +158,8 @@ pub enum Opcode {
 
     // objects
     New,
+    GetAttr,
+    SetAttr,
     Index,
 
     EmptyList,
@@ -194,6 +200,9 @@ impl Opcode {
             | Opcode::Call
             | Opcode::CallForeign
             | Opcode::Num
+            | Opcode::New
+            | Opcode::SetAttr
+            | Opcode::GetAttr
             | Opcode::Copy => true,
             _ => false,
         }

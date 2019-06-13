@@ -1,4 +1,4 @@
-use std::collections::{HashMap, LinkedList};
+use std::collections::{HashMap, HashSet, LinkedList};
 use std::sync::{Arc, Mutex};
 use std::{fmt, io};
 
@@ -18,11 +18,18 @@ pub enum VMError {
     EmptyPop,
     CombineErr(String),
     TypeError(String),
+    StructNotFound(u16),
     Msg(String),
     DifferentNArgs,
     NotIndexable,
     InvalidConversion,
 }
+
+pub struct VMStruct {
+    pub items: Vec<String>,
+}
+
+pub struct VMStructId(pub u32);
 
 // static (read only) and state part
 
@@ -148,10 +155,17 @@ impl<'a, 'write> Fiber<'a, 'write> {
     }
 
     fn heap_alloc(&mut self) -> HeapRef {
-        let loc = self.heap.len();
-        let mut new = ObjectInfo::new(Object::Empty);
-        new.alive = true;
-        self.heap.push(new);
+        let loc = if let Some(loc) = self.free.pop() {
+            self.heap[loc].alive = true;
+            loc
+        } else {
+            let loc = self.heap.len();
+            let mut new = ObjectInfo::new(Object::Empty);
+            new.alive = true;
+            self.heap.push(new);
+
+            loc
+        };
 
         HeapRef { loc }
     }
@@ -427,7 +441,54 @@ impl<'a, 'write> Fiber<'a, 'write> {
                     return Err(VMError::TypeError("List".to_owned()));
                 }
             }
-            Opcode::New => {}
+            Opcode::New => {
+                let heap_ref = self.heap_alloc();
+                let struct_id = self.current_f.advance_u16();
+                let struct_info = self
+                    .base
+                    .structs
+                    .get(struct_id as usize)
+                    .ok_or(VMError::StructNotFound(struct_id))?;
+
+                let ptr = self.heap_mut_ref(heap_ref);
+                *ptr = Object::Struct(vec![Value::nil(); struct_info.items.len()]);
+
+                self.push(Value::Heap(heap_ref));
+            }
+            Opcode::SetAttr => {
+                let item_loc = self.current_f.advance_u16();
+
+                let item = self.pop()?;
+                let struct_ref = self
+                    .peek()?
+                    .as_object()
+                    .ok_or_else(|| VMError::TypeError("Struct/Object".to_owned()))?;
+
+                let obj = self.heap_mut_ref(struct_ref);
+
+                if let Object::Struct(vec) = obj {
+                    vec[item_loc as usize] = item
+                } else {
+                    return Err(VMError::TypeError("Struct".to_owned()));
+                }
+            }
+            Opcode::GetAttr => {
+                let item_loc = self.current_f.advance_u16();
+
+                let struct_ref = self
+                    .peek()?
+                    .as_object()
+                    .ok_or_else(|| VMError::TypeError("Struct/Object".to_owned()))?;
+
+                let obj = self.heap_mut_ref(struct_ref);
+
+                if let Object::Struct(vec) = obj {
+                    let item = vec[item_loc as usize];
+                    self.push(item);
+                } else {
+                    return Err(VMError::TypeError("Struct".to_owned()));
+                }
+            }
             Opcode::Index => {
                 let index = self.pop()?;
                 let val = self.pop()?;
@@ -686,6 +747,7 @@ impl<'a> fmt::Debug for VM<'a> {
 pub struct VM<'write> {
     blocks: Vec<Block>,
     fn_labels: HashMap<String, u16>,
+    structs: Vec<VMStruct>,
 
     fn_foreign: Vec<fn(&mut Fiber)>,
 
@@ -701,6 +763,7 @@ impl<'a> VM<'a> {
 
             fn_labels: HashMap::new(),
             fn_foreign: Vec::new(),
+            structs: Vec::new(),
 
             output: Arc::new(Mutex::new(output)),
 
@@ -741,6 +804,13 @@ impl<'a> VM<'a> {
     pub fn place_block(&mut self, index: u16, mut block: Block) {
         block.finish(self);
         self.blocks[index as usize] = block;
+    }
+
+    pub fn add_struct(&mut self, item: VMStruct) -> VMStructId {
+        let id = self.structs.len();
+        self.structs.push(item);
+
+        VMStructId(id as u32)
     }
 
     pub fn add_start(&mut self) {
@@ -859,9 +929,7 @@ mod tests {
     use super::*;
     use crate::Opcode::*;
 
-    fn test_program(instrs: &[Instruction]) -> Result<Value, VMError> {
-        let mut buffer = Vec::new();
-        let mut vm = VM::new(Box::new(buffer));
+    fn test_program(vm: &mut VM, instrs: &[Instruction]) -> Result<Value, VMError> {
         let mut block = Block::new("start", 0);
 
         for instr in instrs.iter() {
@@ -869,7 +937,7 @@ mod tests {
         }
 
         block.add_instruction(Instruction::Halt);
-        block.finish(&mut vm);
+        block.finish(vm);
         vm.add_block(block);
 
         let mut f = vm.new_fiber("start").unwrap();
@@ -878,19 +946,43 @@ mod tests {
     }
 
     #[test]
-    fn test_list2() {
+    fn test_struct() {
+        use Instruction::*;
+        let mut buffer = Vec::new();
+        let mut vm = VM::new(Box::new(buffer));
+
+        let struct_id = vm.add_struct(VMStruct {
+            items: vec!["x".to_owned()],
+        });
+
+        let res = test_program(
+            &mut vm,
+            &[New(struct_id.0 as u16), Num(42), SetAttr(0), GetAttr(0)],
+        );
+
+        assert_eq!(res, Ok(Value::number(42.0)))
+    }
+
+    #[test]
+    fn test_list() {
         use Instruction::*;
 
-        let res = test_program(&[
-            EmptyList,
-            Num(42),
-            PushList,
-            Num(43),
-            PushList,
-            PopList,
-            Pop,
-            PopList,
-        ]);
+        let mut buffer = Vec::new();
+        let mut vm = VM::new(Box::new(buffer));
+
+        let res = test_program(
+            &mut vm,
+            &[
+                EmptyList,
+                Num(42),
+                PushList,
+                Num(43),
+                PushList,
+                PopList,
+                Pop,
+                PopList,
+            ],
+        );
 
         assert_eq!(res, Ok(Value::number(42.0)))
     }
