@@ -1,15 +1,9 @@
-#![feature(ptr_internals)]
-#![feature(allocator_api)]
-#![feature(alloc_layout_extra)]
-
 use std::collections::{HashMap, LinkedList};
 use std::sync::{Arc, Mutex};
 use std::{fmt, io};
 
 pub mod opcode;
 pub mod value;
-
-mod collections;
 
 use self::opcode::{Instruction, Opcode};
 use self::value::*;
