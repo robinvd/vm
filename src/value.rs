@@ -145,6 +145,14 @@ impl Value {
         }
     }
 
+    pub fn as_object(self) -> Option<HeapRef> {
+        if let Value::Heap(obj) = self {
+            Some(obj)
+        } else {
+            None
+        }
+    }
+
     pub fn as_bool(self) -> Option<bool> {
         match self {
             Value::True => Some(true),

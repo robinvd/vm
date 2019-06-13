@@ -17,6 +17,7 @@ pub enum VMError {
     WrongOpCode(u8),
     EmptyPop,
     CombineErr(String),
+    TypeError(String),
     Msg(String),
     DifferentNArgs,
     NotIndexable,
@@ -216,6 +217,13 @@ impl<'a, 'write> Fiber<'a, 'write> {
         self.value_stack.pop().ok_or(VMError::EmptyPop)
     }
 
+    pub fn peek(&mut self) -> Result<Value, VMError> {
+        if self.value_stack.len() <= self.current_f.stack_start {
+            return Err(VMError::EmptyPop);
+        }
+        self.value_stack.last().ok_or(VMError::EmptyPop).map(|x| *x)
+    }
+
     pub fn push_frame(&mut self, f_index: usize) -> Result<(), VMError> {
         let new_block = &self.base.blocks[f_index];
         let f = FState::new(
@@ -387,7 +395,37 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 let ptr = self.heap_mut_ref(heap_ref);
 
                 *ptr = Object::List(Vec::new());
-                self.push(Value::Heap(heap_ref))
+                self.push(Value::Heap(heap_ref));
+            }
+            Opcode::PushList => {
+                let val = self.pop()?;
+                let list_ref = self
+                    .peek()?
+                    .as_object()
+                    .ok_or_else(|| VMError::TypeError("List/Object".to_owned()))?;
+
+                let obj = self.heap_mut_ref(list_ref);
+
+                if let Object::List(vec) = obj {
+                    vec.push(val);
+                } else {
+                    return Err(VMError::TypeError("List".to_owned()));
+                }
+            }
+            Opcode::PopList => {
+                let list_ref = self
+                    .peek()?
+                    .as_object()
+                    .ok_or_else(|| VMError::TypeError("List/Object".to_owned()))?;
+
+                let obj = self.heap_mut_ref(list_ref);
+
+                if let Object::List(vec) = obj {
+                    let val = vec.pop().unwrap_or(Value::nil());
+                    self.push(val);
+                } else {
+                    return Err(VMError::TypeError("List".to_owned()));
+                }
             }
             Opcode::New => {}
             Opcode::Index => {
@@ -821,37 +859,29 @@ mod tests {
     use super::*;
     use crate::Opcode::*;
 
-    // fn load_file(file: impl AsRef<std::path::Path>) -> Result<String, VMError> {
-    //     use std::io::Read;
+    #[test]
+    fn test_list() {
+        let mut buffer = Vec::new();
+        let mut vm = VM::new(Box::new(buffer));
+        let mut block = Block::new("start", 0);
 
-    //     let mut input = String::new();
+        block.add_opcode(Opcode::EmptyList, None).unwrap();
+        block.add_opcode(Opcode::Num, Some(42)).unwrap();
+        block.add_opcode(Opcode::PushList, None).unwrap();
+        block.add_opcode(Opcode::Num, Some(43)).unwrap();
+        block.add_opcode(Opcode::PushList, None).unwrap();
+        block.add_opcode(Opcode::PopList, None).unwrap();
+        block.add_opcode(Opcode::Pop, None).unwrap();
+        block.add_opcode(Opcode::PopList, None).unwrap();
 
-    //     std::fs::File::open(file)
-    //         .unwrap()
-    //         .read_to_string(&mut input)
-    //         .unwrap();
+        block.add_opcode(Opcode::Halt, None).unwrap();
+        block.finish(&mut vm);
+        vm.add_block(block);
 
-    //     Ok(input)
-    // }
-
-    // fn load_vm<'a>(input: &'a str, buffer: &'a mut Vec<u8>) -> VM<'a> {
-    //     use combine::Parser;
-    //     use crate::compiler;
-    //     use crate::parser;
-
-    //     let mut vm = VM::new(Box::new(buffer));
-    //     vm.register_basic();
-    //     vm.register_internal();
-
-    //     let parsed = parser::code::parse_file()
-    //         .easy_parse(input)
-    //         .expect("failed to parse");
-
-    //     compiler::compile(&mut vm, &parsed.0).expect("failed to compile");
-    //     vm.add_start();
-
-    //     vm
-    // }
+        let mut f = vm.new_fiber("start").unwrap();
+        let res = f.run();
+        assert_eq!(res, Ok(Value::number(42.0)));
+    }
 
     #[test]
     fn test_gc() {

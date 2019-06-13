@@ -42,8 +42,11 @@ pub enum Instruction {
     New,
     Index,
 
-    EmptyMap,
     EmptyList,
+    PushList,
+    PopList,
+
+    EmptyMap,
 
     // async:
     // asyncjmp
@@ -94,8 +97,10 @@ impl Instruction {
             Instruction::New => (Opcode::New, None),
             Instruction::Index => (Opcode::Index, None),
 
-            Instruction::EmptyMap => (Opcode::EmptyMap, None),
             Instruction::EmptyList => (Opcode::EmptyList, None),
+            Instruction::PushList => (Opcode::PushList, None),
+            Instruction::PopList => (Opcode::PopList, None),
+            Instruction::EmptyMap => (Opcode::EmptyMap, None),
 
             // async:
             // asyncjmp
@@ -151,8 +156,11 @@ pub enum Opcode {
     New,
     Index,
 
-    EmptyMap,
     EmptyList,
+    PushList,
+    PopList,
+
+    EmptyMap,
 
     // async:
     // asyncjmp
