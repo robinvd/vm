@@ -587,9 +587,9 @@ impl Block {
         Ok(())
     }
 
-    pub fn add_instruction(&mut self, instr: Instruction) -> Result<(), VMError> {
+    pub fn add_instruction(&mut self, instr: Instruction) {
         let (opcode, arg) = instr.to_opcode();
-        self.add_opcode(opcode, arg)
+        self.add_opcode(opcode, arg).unwrap();
     }
 
     /// Finish this block
@@ -859,28 +859,40 @@ mod tests {
     use super::*;
     use crate::Opcode::*;
 
-    #[test]
-    fn test_list() {
+    fn test_program(instrs: &[Instruction]) -> Result<Value, VMError> {
         let mut buffer = Vec::new();
         let mut vm = VM::new(Box::new(buffer));
         let mut block = Block::new("start", 0);
 
-        block.add_opcode(Opcode::EmptyList, None).unwrap();
-        block.add_opcode(Opcode::Num, Some(42)).unwrap();
-        block.add_opcode(Opcode::PushList, None).unwrap();
-        block.add_opcode(Opcode::Num, Some(43)).unwrap();
-        block.add_opcode(Opcode::PushList, None).unwrap();
-        block.add_opcode(Opcode::PopList, None).unwrap();
-        block.add_opcode(Opcode::Pop, None).unwrap();
-        block.add_opcode(Opcode::PopList, None).unwrap();
+        for instr in instrs.iter() {
+            block.add_instruction(*instr);
+        }
 
-        block.add_opcode(Opcode::Halt, None).unwrap();
+        block.add_instruction(Instruction::Halt);
         block.finish(&mut vm);
         vm.add_block(block);
 
         let mut f = vm.new_fiber("start").unwrap();
         let res = f.run();
-        assert_eq!(res, Ok(Value::number(42.0)));
+        res
+    }
+
+    #[test]
+    fn test_list2() {
+        use Instruction::*;
+
+        let res = test_program(&[
+            EmptyList,
+            Num(42),
+            PushList,
+            Num(43),
+            PushList,
+            PopList,
+            Pop,
+            PopList,
+        ]);
+
+        assert_eq!(res, Ok(Value::number(42.0)))
     }
 
     #[test]
