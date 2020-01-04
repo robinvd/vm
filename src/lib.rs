@@ -23,6 +23,7 @@ pub enum VMError {
     DifferentNArgs,
     NotIndexable,
     InvalidConversion,
+    AttrIndexNotFound(usize),
 }
 
 pub struct VMStruct {
@@ -456,7 +457,7 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 self.push(Value::Heap(heap_ref));
             }
             Opcode::SetAttr => {
-                let item_loc = self.current_f.advance_u16();
+                let item_loc = self.current_f.advance_u16() as usize;
 
                 let item = self.pop()?;
                 let struct_ref = self
@@ -467,13 +468,16 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 let obj = self.heap_mut_ref(struct_ref);
 
                 if let Object::Struct(vec) = obj {
-                    vec[item_loc as usize] = item
+                    if item_loc >= vec.len() {
+                        return Err(VMError::AttrIndexNotFound(item_loc));
+                    }
+                    vec[item_loc] = item
                 } else {
                     return Err(VMError::TypeError("Struct".to_owned()));
                 }
             }
             Opcode::GetAttr => {
-                let item_loc = self.current_f.advance_u16();
+                let item_loc = self.current_f.advance_u16() as usize;
 
                 let struct_ref = self
                     .peek()?
@@ -483,7 +487,10 @@ impl<'a, 'write> Fiber<'a, 'write> {
                 let obj = self.heap_mut_ref(struct_ref);
 
                 if let Object::Struct(vec) = obj {
-                    let item = vec[item_loc as usize];
+                    if item_loc >= vec.len() {
+                        return Err(VMError::AttrIndexNotFound(item_loc));
+                    }
+                    let item = vec[item_loc];
                     self.push(item);
                 } else {
                     return Err(VMError::TypeError("Struct".to_owned()));
@@ -963,6 +970,21 @@ mod tests {
         );
 
         assert_eq!(res, Ok(Value::number(42.0)))
+    }
+
+    #[test]
+    fn test_struct_invalid_attr() {
+        use Instruction::*;
+        let mut buffer = Vec::new();
+        let mut vm = VM::new(Box::new(buffer));
+
+        let struct_id = vm.add_struct(VMStruct {
+            items: vec!["x".to_owned()],
+        });
+
+        let res = test_program(&mut vm, &[New(struct_id.0 as u16), Num(42), SetAttr(1)]);
+
+        assert_eq!(res, Err(VMError::AttrIndexNotFound(1)))
     }
 
     #[test]
