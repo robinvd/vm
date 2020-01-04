@@ -1,17 +1,134 @@
-use std::mem;
+pub trait InstructionExt {
+    type OpcodeType;
+    fn to_opcode(self) -> Self::OpcodeType;
+    fn to_bytes(self, sink: &mut Vec<u8>);
+}
 
-#[derive(Debug, Clone, Copy)]
+pub trait OpcodeExt: Sized {
+    fn from_u8(value: u8) -> Option<Self>;
+
+    unsafe fn from_u8_unchecked(value: u8) -> Self;
+
+    fn has_arg(self) -> bool {
+        self.arg_count() > 0
+    }
+    fn arg_count(self) -> usize;
+}
+
+macro_rules! flat_pattern {
+    ($field:ident, , $a:ident) => {
+        Self::$field
+    };
+    ($field:ident, $ty:ty, $a:ident) => {
+        Self::$field($a)
+    };
+}
+
+macro_rules! flat_arm {
+    ($field:ident, $ty:ty, $flat_name:ident, $output:ident, $a:ident) => {{
+        $output.push($flat_name::$field as u8);
+        $output.push(($a >> 8) as u8);
+        $output.push($a as u8);
+    }};
+    ($field:ident, , $flat_name:ident, $output:ident, $a:ident) => {{
+        $output.push($flat_name::$field as u8);
+    }};
+}
+
+macro_rules! count {
+    () => {
+        0
+    };
+    ($x:tt, $($xs:tt, )*) => {count!($($xs)*) + 1};
+}
+
+macro_rules! derive_flat {
+    (
+        $(#[$($derives:meta)+])? $vis:vis enum $name:ident { $( $field:ident $(( $ty:ty ))? ),* }
+        $(#[$($flat_derives:meta)+])? $flat_vis:vis enum $flat_name:ident { $( $flat_field:ident ),* }
+    ) => {
+        $(#[$( $derives )*])*
+        #[repr(C)]
+        $vis enum $name {
+            $(
+                $field $(($ty))* ,
+            )*
+        }
+
+        impl InstructionExt for $name {
+            type OpcodeType = $flat_name;
+            fn to_opcode(self) -> Self::OpcodeType {
+                match self {
+                    $(
+                        flat_pattern!($field, $($ty)*, _x) => $flat_name::$field,
+                    )*
+                }
+            }
+            fn to_bytes(self, out: &mut Vec<u8>) {
+                match self {
+                    $(
+                        flat_pattern!($field, $($ty)*, x) => flat_arm!($field, $($ty)*, $flat_name, out, x),
+                    )*
+                }
+            }
+        }
+
+        $(#[$( $flat_derives )*])*
+        #[repr(u8)]
+        $flat_vis enum $flat_name {
+            $(
+                $field,
+            )*
+            $(
+                $flat_field,
+            )*
+        }
+
+        impl OpcodeExt for $flat_name {
+            unsafe fn from_u8_unchecked(value: u8) -> Self {
+                std::mem::transmute(value)
+            }
+
+            fn from_u8(value: u8) -> Option<Self> {
+                let all_opcodes = &[$(Self::$field ,)* $(Self::$flat_field ,)*];
+                let last_opcode = *all_opcodes.last().unwrap();
+                let last_value = last_opcode as u8;
+
+                if value <= last_value {
+                    Some(unsafe{Self::from_u8_unchecked(value)})
+                } else {
+                    None
+                }
+
+            }
+
+            fn arg_count(self) -> usize {
+                match self {
+                    $(
+                        Self::$field => count!($($ty ,)*),
+                    )*
+                    _ => 0,
+                }
+            }
+        }
+    };
+}
+
+derive_flat! {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Instruction {
     // general
     Halt,
     Pop,
     Copy(u16),
     Load(u16),
+    Upvalue(u16),
     Store(u16),
     Print,
 
     // fn
     Call(u16),
+    CallObj,
     CallForeign(u16),
     Ret,
 
@@ -50,174 +167,45 @@ pub enum Instruction {
 
     EmptyMap,
 
+    NewClosure(u16),
+
     // async:
     // asyncjmp
     // await
-    Nop,
+    Nop
 }
 
-impl Instruction {
-    pub(crate) fn to_opcode(self) -> (Opcode, Option<u16>) {
-        match self {
-            // general
-            Instruction::Halt => (Opcode::Halt, None),
-            Instruction::Pop => (Opcode::Pop, None),
-            Instruction::Copy(x) => (Opcode::Copy, Some(x)),
-            Instruction::Load(x) => (Opcode::Load, Some(x)),
-            Instruction::Store(x) => (Opcode::Store, Some(x)),
-            Instruction::Print => (Opcode::Print, None),
-
-            // fn
-            Instruction::Call(x) => (Opcode::Call, Some(x)),
-            Instruction::CallForeign(x) => (Opcode::CallForeign, Some(x)),
-            Instruction::Ret => (Opcode::Ret, None),
-
-            // vals
-            Instruction::Const(x) => (Opcode::Const, Some(x)),
-            Instruction::Num(x) => (Opcode::Num, Some(x)),
-            Instruction::Nil => (Opcode::Nil, None),
-            Instruction::True => (Opcode::True, None),
-            Instruction::False => (Opcode::False, None),
-
-            // math
-            Instruction::Add => (Opcode::Add, None),
-            Instruction::Sub => (Opcode::Sub, None),
-            Instruction::Mul => (Opcode::Mul, None),
-            Instruction::Div => (Opcode::Div, None),
-            Instruction::Neg => (Opcode::Neg, None),
-
-            // bool
-            Instruction::Not => (Opcode::Not, None),
-            Instruction::LEQ => (Opcode::LEQ, None),
-            Instruction::GEQ => (Opcode::GEQ, None),
-
-            // jmp
-            Instruction::JmpT(x) => (Opcode::JmpT, Some(x)),
-            Instruction::Jmp(x) => (Opcode::Jmp, Some(x)),
-
-            // objects
-            Instruction::New(x) => (Opcode::New, Some(x)),
-            Instruction::GetAttr(x) => (Opcode::GetAttr, Some(x)),
-            Instruction::SetAttr(x) => (Opcode::SetAttr, Some(x)),
-            Instruction::Index => (Opcode::Index, None),
-
-            Instruction::EmptyList => (Opcode::EmptyList, None),
-            Instruction::PushList => (Opcode::PushList, None),
-            Instruction::PopList => (Opcode::PopList, None),
-            Instruction::EmptyMap => (Opcode::EmptyMap, None),
-
-            // async:
-            // asyncjmp
-            // await
-            Instruction::Nop => (Opcode::Nop, None),
-        }
-    }
-}
-
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[repr(u8)]
 pub enum Opcode {
-    // general
-    Halt,
-    Pop,
-    Copy,
-    Load,
-    Store,
-    Print,
-
-    // fn
-    Call,
-    CallForeign,
-    Ret,
-
-    // vals
-    Const,
-    Num,
-    Nil,
-    True,
-    False,
-
-    // math
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Neg,
-
-    // bool
-    Not,
-    LEQ,
-    GEQ,
-
-    // jmp
-    JmpT,
-    Jmp,
-    JmpTDirect,
     JmpDirect,
-
-    // objects
-    New,
-    GetAttr,
-    SetAttr,
-    Index,
-
-    EmptyList,
-    PushList,
-    PopList,
-
-    EmptyMap,
-
-    // async:
-    // asyncjmp
-    // await
-    Nop,
-    End,
+    JmpTDirect,
+    End
+}
 }
 
-impl Opcode {
-    pub fn from_u8(n: u8) -> Option<Opcode> {
-        if n <= Opcode::End as u8 {
-            Some(unsafe { Self::from_u8_unchecked(n) })
-        } else {
-            None
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_arg_count() {
+        assert_eq!(Opcode::Nop.arg_count(), 0);
+        assert_eq!(Opcode::Num.arg_count(), 1);
     }
 
-    pub unsafe fn from_u8_unchecked(n: u8) -> Opcode {
-        mem::transmute(n)
+    #[test]
+    fn test_from_u8() {
+        assert_eq!(Opcode::from_u8(Opcode::Halt as u8), Some(Opcode::Halt));
+        assert_eq!(Opcode::from_u8(Opcode::End as u8 + 1), None);
     }
 
-    pub fn has_arg(self) -> bool {
-        match self {
-            Opcode::Const
-            | Opcode::Jmp
-            | Opcode::JmpDirect
-            | Opcode::JmpT
-            | Opcode::JmpTDirect
-            | Opcode::Load
-            | Opcode::Store
-            | Opcode::Call
-            | Opcode::CallForeign
-            | Opcode::Num
-            | Opcode::New
-            | Opcode::SetAttr
-            | Opcode::GetAttr
-            | Opcode::Copy => true,
-            _ => false,
-        }
-    }
+    #[test]
+    fn test_from_instr() {
+        assert_eq!(Instruction::Halt.to_opcode(), Opcode::Halt);
 
-    // pub fn stack_effect(&self) -> Option<isize> {
-    //     use self::Opcode::*;
-    //     let x = match *self {
-    //         // general
-    //         Halt | Pop | Print | Add | Mul | Div | Neg | LEQ | JmpT | Store | Index | True
-    //         | False | Nil => -1,
-    //         Const | Copy | New | Load => 1,
-    //         Not | Jmp | Nop => 0,
-    //         Call | CallForeign | Ret => return None,
-    //     };
-    //     Some(x)
-    // }
+        let mut buffer = Vec::new();
+
+        Instruction::Num(5).to_bytes(&mut buffer);
+        assert_eq!(buffer, vec![Opcode::Num as u8, 0, 5]);
+    }
 }

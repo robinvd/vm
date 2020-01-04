@@ -5,7 +5,7 @@ use std::{fmt, io};
 pub mod opcode;
 pub mod value;
 
-use self::opcode::{Instruction, Opcode};
+use self::opcode::{Instruction, InstructionExt, Opcode, OpcodeExt};
 use self::value::*;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -497,6 +497,9 @@ impl<'a, 'write> Fiber<'a, 'write> {
             }
             Opcode::Nop => {}
             Opcode::End => panic!("reached end of block"),
+            Opcode::Upvalue => todo!(),
+            Opcode::CallObj => todo!(),
+            Opcode::NewClosure => todo!(),
         };
         Ok(())
     }
@@ -649,8 +652,7 @@ impl Block {
     }
 
     pub fn add_instruction(&mut self, instr: Instruction) {
-        let (opcode, arg) = instr.to_opcode();
-        self.add_opcode(opcode, arg).unwrap();
+        instr.to_bytes(&mut self.code);
     }
 
     /// Finish this block
