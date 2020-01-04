@@ -1152,5 +1152,4 @@ mod tests {
         // as the locals from f should be popped off
         assert_eq!(fiber.local_stack.len(), 1);
     }
-
 }
