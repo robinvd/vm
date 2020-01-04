@@ -988,6 +988,29 @@ mod tests {
     }
 
     #[test]
+    fn test_closure() {
+        use Instruction::*;
+
+        let mut buffer = Vec::new();
+        let mut vm = VM::new(Box::new(buffer));
+
+        let mut block = Block::new("closure_test", 0);
+
+        let instrs = &[Upvalue(0), Num(5), Add, Print, Ret];
+
+        for instr in instrs.iter() {
+            block.add_instruction(*instr);
+        }
+
+        block.finish(&mut vm);
+        let block_id = vm.add_block(block);
+
+        let res = test_program(&mut vm, &[Num(10), NewClosure(block_id), CallObj]);
+
+        assert_eq!(res, Ok(Value::number(42.0)))
+    }
+
+    #[test]
     fn test_list() {
         use Instruction::*;
 
