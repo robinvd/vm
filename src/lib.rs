@@ -751,13 +751,13 @@ pub struct VM<'write> {
 
     fn_foreign: Vec<fn(&mut Fiber)>,
 
-    output: Arc<Mutex<Box<io::Write + 'write>>>,
+    output: Arc<Mutex<Box<dyn io::Write + 'write>>>,
 
     pub debug: bool,
 }
 
 impl<'a> VM<'a> {
-    pub fn new(output: Box<io::Write + 'a + Sync>) -> Self {
+    pub fn new(output: Box<dyn io::Write + 'a + Sync>) -> Self {
         Self {
             blocks: Vec::default(),
 
